@@ -7,7 +7,7 @@ Owner: mohamadkattan12.
 ## Commands
 - Run: `docker compose up --build` → web http://localhost:3000, `curl -s localhost:8000/health/ready` → `{"status":"ready","migrations":3,"services":7}`
 - DB for dev/tests: `docker compose up -d db` (Postgres 17 on 127.0.0.1:5435)
-- API (in `api/`): `pnpm lint && pnpm format:check && pnpm typecheck` → exit 0; `pnpm test` → `56 passed`; `pnpm test:e2e` → `44 passed` (throwaway `clinic_test` database)
+- API (in `api/`): `pnpm lint && pnpm format:check && pnpm typecheck` → exit 0; `pnpm test` → `57 passed`; `pnpm test:e2e` → `48 passed` (throwaway `clinic_test` database)
 - Web (in `web/`): `pnpm lint && pnpm typecheck && pnpm test && pnpm build` → exit 0, `10 passed`, routes `/`, `/staff`, `/trace/[id]`
 - Eval (in `api/`, costs money): `pnpm eval -- --yes [--models ..] [--only ids] [--repeat N]`; free: `pnpm eval -- --check` (runs in CI); judge only: `--calibrate`; re-score saved transcripts: `--rejudge <file>`
 - Migrations: `pnpm exec prisma migrate dev --name <slug>` then `pnpm exec prisma generate`
