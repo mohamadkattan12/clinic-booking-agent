@@ -1,10 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import {
   ConversationsService,
   toApiMessages,
 } from '../src/conversations/conversations.service.js';
+import { AppModule } from '../src/app.module.js';
 import type { PrismaService } from '../src/prisma/prisma.service.js';
 import { PATIENTS } from '../src/seed/data.js';
 import { createTestApp, HEADER, resetData } from './support/app.js';
@@ -147,6 +149,25 @@ describe('conversations and turns (e2e)', () => {
         })
       ).activeTurnId,
     ).toBe(running);
+  });
+
+  it('a turn lock left by a crashed or restarted API is released when the API starts', async () => {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { activeTurnId: randomUUID() }, // the process died mid-turn
+    });
+    const restarted = (
+      await Test.createTestingModule({ imports: [AppModule] }).compile()
+    ).createNestApplication();
+    await restarted.init();
+    await restarted.close();
+    expect(
+      (
+        await prisma.conversation.findUniqueOrThrow({
+          where: { id: conversationId },
+        })
+      ).activeTurnId,
+    ).toBeNull();
   });
 
   it('two simultaneous messages: one is answered, the other gets 409', async () => {
