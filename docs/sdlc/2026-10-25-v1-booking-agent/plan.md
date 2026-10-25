@@ -133,3 +133,9 @@ refusal fallback kept.
   as `[Clinic system]` user-side text; consecutive user-side messages are merged both when building
   history and when appending the new message (found by the replay test: two user messages in a row).
   A global `ValidationPipe` (whitelist, forbid unknown fields) validates all DTOs.
+- Step 7: the eval runs locally (`pnpm eval -- --yes` in `api/`, via `tsx`) against a
+  `clinic_eval` database next to `DATABASE_URL`, not in a Docker service: it needs dev
+  dependencies (`@nestjs/testing`, `tsx`) the production image prunes. It loads `api/.env` and the
+  repo-root `.env`. Scenarios may set `handoff: "any"` when either outcome is acceptable (e.g. a
+  cross-patient request). esbuild's install script is declined in `pnpm-workspace.yaml` (tsx uses
+  its prebuilt binary); pnpm 11 refuses to run scripts while a build decision is open.

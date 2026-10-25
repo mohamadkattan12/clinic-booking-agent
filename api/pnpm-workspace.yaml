@@ -1,3 +1,5 @@
 allowBuilds:
   '@prisma/engines': true
   prisma: true
+  # tsx works with esbuild's prebuilt binary; its install script is not needed
+  esbuild: false
