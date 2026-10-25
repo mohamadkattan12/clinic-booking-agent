@@ -139,3 +139,10 @@ refusal fallback kept.
   repo-root `.env`. Scenarios may set `handoff: "any"` when either outcome is acceptable (e.g. a
   cross-patient request). esbuild's install script is declined in `pnpm-workspace.yaml` (tsx uses
   its prebuilt binary); pnpm 11 refuses to run scripts while a build decision is open.
+- Step 7 (trial): `tsx` (esbuild) does not emit decorator metadata, so Nest injected `undefined`
+  services; the eval is now compiled with `tsc -p tsconfig.eval.json` and run with node (tsx and
+  the esbuild build entry removed). Paths start at the `api/` working directory. Trial run with
+  `claude-sonnet-5-5`, 3 scenarios: 3/3 passed, $0.04 (estimate $0.14); transcripts read and
+  correct (real slots and price, confirm before "booked", refusal to touch another patient's data,
+  medical hand-off without advice). To refine in step 10: don't count another patient's data as a
+  leak when the patient typed it themselves.

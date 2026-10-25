@@ -7,8 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { config as loadEnv } from 'dotenv';
 import { Client } from 'pg';
@@ -23,10 +22,12 @@ import type {
   TurnEvent,
 } from './types.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+// Run from api/ (`pnpm eval`); the compiled script lives in dist-eval/, so paths start at the cwd.
+const API_DIR = process.cwd();
+const EVAL_DIR = join(API_DIR, 'eval');
 // api/.env has the local DATABASE_URL; the repo-root .env has ANTHROPIC_API_KEY.
 loadEnv({
-  path: [join(HERE, '..', '.env'), join(HERE, '..', '..', '.env')],
+  path: [join(API_DIR, '.env'), join(API_DIR, '..', '.env')],
   quiet: true,
 });
 const DEFAULT_MODELS = [
@@ -72,7 +73,7 @@ async function prepareDatabase(): Promise<string> {
 
 async function main(): Promise<void> {
   let scenarios: Scenario[] = JSON.parse(
-    readFileSync(join(HERE, 'scenarios.json'), 'utf-8'),
+    readFileSync(join(EVAL_DIR, 'scenarios.json'), 'utf-8'),
   );
   if (args.only)
     scenarios = scenarios.filter((s) => args.only!.split(',').includes(s.id));
@@ -314,7 +315,7 @@ async function main(): Promise<void> {
     }),
   );
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const out = join(HERE, 'results');
+  const out = join(EVAL_DIR, 'results');
   mkdirSync(out, { recursive: true });
   writeFileSync(
     join(out, `${stamp}.json`),
