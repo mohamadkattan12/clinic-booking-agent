@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isUUID } from 'class-validator';
 import { Clock } from '../common/clock.js';
 import { toRiyadhIso } from '../common/time.js';
 import {
@@ -120,9 +121,12 @@ export class ActionsService {
         check.end,
       );
     } else {
-      const existing = await this.prisma.appointment.findUnique({
-        where: { id: input.appointmentId },
-      });
+      // The id comes from the model; a malformed one is simply not this patient's appointment.
+      const existing = isUUID(input.appointmentId)
+        ? await this.prisma.appointment.findUnique({
+            where: { id: input.appointmentId },
+          })
+        : null;
       const violation = checkChange(existing, patientId, now);
       if (violation || !existing)
         return { ok: false, reason: violation ?? 'not_found' };

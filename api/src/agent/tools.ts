@@ -40,7 +40,13 @@ function tool<S extends z.ZodType>(
     inputSchema,
     run: async (input) => {
       const started = Date.now();
-      const result = await body(input);
+      let result: unknown;
+      try {
+        result = await body(input);
+      } catch {
+        // Record the failure and keep internals (database errors) away from the model.
+        result = { error: 'tool_failed' };
+      }
       await ctx.record(name, input, result, Date.now() - started);
       return JSON.stringify(result);
     },
