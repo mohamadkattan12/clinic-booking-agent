@@ -79,6 +79,7 @@ export class ConversationsController {
         patient: { select: { id: true, name: true, phone: true } },
         messages: { orderBy: { createdAt: 'asc' } },
         actions: { orderBy: { createdAt: 'asc' } },
+        toolCalls: { select: { turnId: true, result: true } },
       },
     });
     if (!conversation) throw new NotFoundException('No such conversation.');
@@ -86,6 +87,7 @@ export class ConversationsController {
       .map((m) => ({
         id: m.id,
         at: toRiyadhIso(m.createdAt),
+        sortKey: m.createdAt.toISOString(),
         role:
           m.role === 'event'
             ? 'event'
@@ -98,13 +100,35 @@ export class ConversationsController {
             : texts(m.content, m.role === 'user'),
       }))
       .filter((m) => m.text);
-    const actions = conversation.actions.map((a) => ({
-      id: a.id,
-      status: a.status,
-      payload: a.payload,
-      expiresAt: toRiyadhIso(a.expiresAt),
-      at: toRiyadhIso(a.createdAt),
-    }));
+    // A card is created mid-turn but the turn's messages are stored when it ends: show each card
+    // right after the last message of the turn that proposed it.
+    const turnOfAction = new Map<string, string>();
+    for (const call of conversation.toolCalls) {
+      const actionId = (call.result as { action_id?: string } | null)
+        ?.action_id;
+      if (actionId) turnOfAction.set(actionId, call.turnId);
+    }
+    const turnEnd = new Map<string, number>();
+    for (const m of conversation.messages) {
+      if (m.turnId)
+        turnEnd.set(
+          m.turnId,
+          Math.max(turnEnd.get(m.turnId) ?? 0, m.createdAt.getTime()),
+        );
+    }
+    const actions = conversation.actions.map((a) => {
+      const end = turnEnd.get(turnOfAction.get(a.id) ?? '');
+      return {
+        id: a.id,
+        status: a.status,
+        payload: a.payload,
+        expiresAt: toRiyadhIso(a.expiresAt),
+        at: toRiyadhIso(a.createdAt),
+        sortKey: new Date(
+          end !== undefined ? end + 1 : a.createdAt.getTime(),
+        ).toISOString(),
+      };
+    });
     return {
       id: conversation.id,
       status: conversation.status,

@@ -126,9 +126,12 @@ function Thread({ conversationId }: { conversationId: string }) {
   if (!conversation.data) return <p className="text-muted-foreground">Loading conversation…</p>;
   const c = conversation.data;
   const items = [
-    ...c.messages.map((m) => ({ kind: "message" as const, at: m.at, message: m })),
-    ...c.actions.map((a) => ({ kind: "action" as const, at: a.at, action: a })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+    // Clinic events (confirm/decline outcomes) are for the model; the card already shows them.
+    ...c.messages
+      .filter((m) => m.role !== "event")
+      .map((m) => ({ kind: "message" as const, sortKey: m.sortKey, message: m })),
+    ...c.actions.map((a) => ({ kind: "action" as const, sortKey: a.sortKey, action: a })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   const handedOff = c.status === "handed_off";
 
   return (
@@ -167,7 +170,7 @@ function Thread({ conversationId }: { conversationId: string }) {
         )}
         {pending && (
           <>
-            <Bubble message={{ id: "pending", at: "", role: "patient", text: pending.text }} />
+            <Bubble message={{ id: "pending", at: "", sortKey: "", role: "patient", text: pending.text }} />
             {pending.error ? (
               <li role="alert" className="self-start rounded-lg border border-destructive/50 bg-background px-3 py-2 text-sm">
                 <p className="text-destructive">{pending.error}</p>
@@ -228,10 +231,6 @@ function Thread({ conversationId }: { conversationId: string }) {
 }
 
 function Bubble({ message }: { message: ChatMessage }) {
-  if (message.role === "event") {
-    const text = message.text.replace(/^\[Clinic system\]\s*/, "");
-    return <li className="self-center rounded-full bg-background px-3 py-1 text-xs text-muted-foreground">{text}</li>;
-  }
   const mine = message.role === "patient";
   return (
     <li

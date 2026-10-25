@@ -24,9 +24,10 @@ export type Action = {
   payload: ActionPayload;
   expiresAt: string;
   at: string;
+  sortKey: string; // after the turn that proposed it
 };
 
-export type ChatMessage = { id: string; at: string; role: "patient" | "agent" | "event"; text: string };
+export type ChatMessage = { id: string; at: string; sortKey: string; role: "patient" | "agent" | "event"; text: string };
 
 export type Conversation = {
   id: string;

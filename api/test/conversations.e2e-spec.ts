@@ -114,6 +114,9 @@ describe('conversations and turns (e2e)', () => {
       status: 'pending',
       payload: { dentistNameEn: 'Dr. Sara Al-Qahtani' },
     });
+    // The card shows after the turn that proposed it, not above the patient's request.
+    const lastOfTurn = view.body.messages.at(-1).sortKey as string;
+    expect(view.body.actions[0].sortKey > lastOfTurn).toBe(true);
   });
 
   it('ignores a repeated clientMessageId without calling the model again', async () => {

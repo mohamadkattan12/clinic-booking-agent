@@ -150,3 +150,13 @@ refusal fallback kept.
   and runs a scenario setup plus propose/confirm; it runs in CI. Verified it catches the bug: the
   same code under tsx fails with the original "Cannot read properties of undefined (reading
   'patient')". Retest with Sonnet 5.5: 3/3, $0.03.
+- Step 9: Next 16 Cache Components require `<Suspense>` around URL hooks (`usePathname` in the
+  nav, `useSearchParams`/`useParams` in pages). This shadcn version's Button has no `asChild`;
+  links use `buttonVariants`. Conversation id lives in the URL (`/?c=...`). Found in Chrome: cards
+  sorted above the message that asked for them (turn messages are stored at the end of the turn,
+  cards mid-turn); the API now returns a `sortKey` that places each card after the last message of
+  its turn (linked through the tool call), with an e2e assertion. Clinic event notes are hidden in
+  the chat (the card shows the outcome; the model still receives them). Docker build failure was
+  not the network: removing tsx had also removed `esbuild: false`, and esbuild is still a
+  transitive dependency (Vite); restored. Live check: Arabic booking -> card -> Confirm -> shown
+  on /staff and in /trace (2 turns, $0.02), no console errors.
