@@ -218,6 +218,45 @@ describe('availableSlots', () => {
     ).toEqual({ ok: false, reason });
   });
 
+  it('can find evening slots: a time window is applied before the per-day cap', () => {
+    // Without a window only the first slots of each day come back, so a patient asking for
+    // "after 17:00" could never be offered one.
+    const result = availableSlots(
+      data,
+      [],
+      {
+        serviceId: 'checkup',
+        dateFrom: '2026-10-27',
+        dateTo: '2026-10-27',
+        dentistId: 'dr-omar',
+        fromMinute: 17 * 60,
+      },
+      NOW,
+    );
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.slots[0].start).toBe('2026-10-27T17:00:00+03:00');
+    const until = availableSlots(
+      data,
+      [],
+      {
+        serviceId: 'cleaning',
+        dateFrom: '2026-10-26',
+        dateTo: '2026-10-26',
+        dentistId: 'dr-sara',
+        fromMinute: 13 * 60,
+        toMinute: 14 * 60,
+      },
+      NOW,
+    );
+    if (!until.ok) throw new Error(until.reason);
+    expect(until.slots.map((s) => s.start.slice(11, 16))).toEqual([
+      '13:00',
+      '13:15',
+      '13:30',
+      '13:45',
+    ]);
+  });
+
   it('allows a 14-day range', () => {
     expect(
       availableSlots(
