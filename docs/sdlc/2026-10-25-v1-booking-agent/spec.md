@@ -1,107 +1,140 @@
 # Spec: Clinic booking agent in a WhatsApp-style chat (v1)
 
-From: intent.md (accepted 2026-10-25) · Status: accepted by Mohamad Nour on 2026-10-25 (concerns 1 and 3 as proposed)
+From: intent.md (accepted 2026-10-25) · Status: accepted by Mohamad Nour on 2026-10-25 (concerns 1
+and 3 as proposed); amended 2026-10-25 after an independent Codex review, amendments accepted by
+Mohamad Nour (see "Review amendments")
 Skills applied: sdlc, claude-api (TypeScript tool runner), nestjs-patterns, prisma-patterns,
 security-review, frontend-principles; lessons from arabic-docs-qa (localhost ports, eval design,
 fresh-clone check, Markdown without images)
-Produced by: `/sdlc` stage 2 for project #2
+Produced by: `/sdlc` stage 2 for project #2, revised with the review in `## Review amendments`
 
 ## Flagged concerns
-1. **Confirmation must not depend on the model.** Decision (proposed): tools that change data
-   (`propose_booking`, `propose_reschedule`, `propose_cancel`) never write appointments. They
-   create a *pending action* and the chat shows **Confirm / Cancel buttons** (like WhatsApp reply
-   buttons). Only the patient's button press, a separate API call the model cannot make, executes
-   it. A pending action expires after 10 minutes and is re-checked for slot conflicts on confirm.
-   **Needs your OK.**
-2. **Patient identity.** WhatsApp gives the agent the sender's phone number. The simulator lets
-   the reviewer pick one of 4 fictional patients (or "new patient"); every tool is scoped to that
-   phone number in code, so the agent can never read or change another patient's appointments,
-   whatever the conversation says. This is also an eval case.
-3. **Medical safety.** The system prompt forbids medical advice, and the eval measures it. A
-   keyword or classifier pre-filter is **not** added in v1 (false positives on normal questions
-   like "is the cleaning painful?"); the eval decides whether one is needed. **Needs your OK.**
-4. **Dates and time zones.** Clinic time is Asia/Riyadh. "Tomorrow" etc. are resolved by the model
-   using the current date/time injected per turn (after the prompt-cache breakpoint), and
-   `check_availability` takes explicit ISO dates, so the code validates every date.
-5. **Eval cost.** A simulated patient (Claude) plus the agent per scenario, ~30 scenarios, 3 agent
-   models: estimated $3–6 per full run. Gated with `--yes` like project #1.
+1. **Confirmation must not depend on the model.** Decision (Mohamad): tools that change data
+   never write appointments. They create a *pending action*; the chat shows **Confirm / Cancel**
+   buttons with the frozen details. Only the patient's button press, a separate API call the model
+   cannot make, executes it (rules in requirement 5).
+2. **Identity.** WhatsApp gives the agent the sender's phone number. The simulator's patient picker
+   creates a **conversation bound to one fictional patient**; switching patient starts a new
+   conversation. Every patient-facing endpoint authorizes through the conversation's patient, and
+   every tool is scoped to it in code. `/staff` and `/trace` are deliberately unauthenticated
+   staff views in this local demo, and the README says so.
+3. **Medical safety.** Decision (Mohamad): prompt rules plus measurement, no keyword pre-filter in v1.
+   The eval reports observed rates with denominators, never a safety guarantee.
+4. **Dates and time zones.** Clinic time is Asia/Riyadh (UTC+3, no DST). Availability takes
+   clinic-local `YYYY-MM-DD` dates; booking instants must carry an offset; storage is `timestamptz`;
+   confirmations display Riyadh time. The clock is injectable so tests pin "now".
+5. **Eval cost.** ~30 scenarios × 3 agent models with a simulated patient: estimated $3–6 per full
+   run, gated with `--yes`.
 
 ## Requirements
-1. `docker compose up` starts `db` (Postgres 17), `api` (NestJS) and `web` (Next.js) on
-   127.0.0.1 only; web at http://localhost:3000. Only `ANTHROPIC_API_KEY` is required; an empty
-   value counts as unset.
-2. Seed data on first start: the fictional clinic "عيادة مثال لطب الأسنان / Mithal Dental Clinic"
-   (services with durations and VAT-inclusive prices in SAR, 3 dentists with weekly schedules,
-   opening hours Sat–Thu, address, preparation notes), 4 patients with a few existing
-   appointments. Seeding is idempotent.
-3. **Chat simulator** (`/`): WhatsApp-style thread, patient picker, Arabic/English, RTL-aware,
-   streaming replies, Confirm/Cancel buttons on pending actions, "agent is typing" state, and a
-   "Talking to staff" state after hand-off.
-4. Agent tools (TypeScript SDK tool runner, Zod schemas, `strict` where allowed):
-   - `check_availability({service_id, date_from, date_to, dentist_id?})` → free slots (max 10)
-   - `list_my_appointments()` → the current patient's upcoming appointments
-   - `propose_booking({service_id, slot_start, dentist_id})` → pending action
-   - `propose_reschedule({appointment_id, new_slot_start})` → pending action
-   - `propose_cancel({appointment_id})` → pending action
-   - `handoff_to_staff({reason, summary})` → creates a hand-off ticket; the agent stops replying in
-     that conversation until staff close it
-   Clinic information (services, prices, hours, address, policies) is in the system prompt,
-   which is stable and prompt-cached. Tool inputs are validated again in code (service exists,
-   slot is free and inside opening hours, appointment belongs to the patient, not in the past,
-   cancellation allowed more than 4 h before).
-5. `POST /conversations/:id/messages` streams the reply over SSE (`\n` separators, the tested
-   parser from project #1). `POST /actions/:id/confirm` and `/actions/:id/decline` execute or
-   drop a pending action and post the outcome into the conversation.
-6. **Staff page** (`/staff`): today's and upcoming appointments by dentist, open hand-offs with
-   the conversation summary, "close hand-off" (the agent resumes).
-7. **Trace view** (`/trace/:conversationId`): every turn's model, tool calls with inputs and
-   results, pending actions and their outcome, tokens and cost.
-8. The agent replies in the patient's language, never invents prices or availability (only from
-   the prompt or tools), and never gives medical advice (hands off instead).
-9. **Evaluation** (`npm run eval -- --yes`): ~30 scenarios in `eval/scenarios.json`, each with a
-   patient persona and goal (AR/EN), played by a simulated patient model against the real agent
-   and a fresh database. The harness presses Confirm when the scenario's patient would. Metrics:
-   - task success: final database state matches the scenario's expected outcome (deterministic)
-   - wrong proposals: pending actions that don't match the goal (deterministic)
-   - hand-off correctness: handed off exactly when expected (deterministic)
-   - policy: no medical advice, no invented facts (LLM judge, JSON-delimited inputs)
-   - injection/isolation: attempts to read or change other patients' data or to skip
-     confirmation fail (deterministic from DB + tool logs)
-   - turns, cost and latency per scenario
-   Compares `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; failed scenarios are
-   recorded, not fatal; recommended model by the project #1 rule (complete runs only, best
-   safety, then success, then cost).
-10. CI on every push/PR: lint, typecheck, unit + e2e tests (Postgres service), web build.
+1. `docker compose up` starts `db`, `api` and `web` on 127.0.0.1 only. Startup applies migrations
+   and the seed; `/health/ready` reports database, migration and seed status. Only
+   `ANTHROPIC_API_KEY` is required (empty = unset).
+2. Seed (idempotent): "عيادة مثال لطب الأسنان / Mithal Dental Clinic" with services (duration,
+   VAT-inclusive SAR price), 3 dentists with weekly schedules and the services each offers, opening
+   hours Sat–Thu, address and preparation notes; 4 patients with a few existing appointments.
+3. **Chat simulator** (`/`): patient picker (new conversation per patient), WhatsApp-style thread,
+   Arabic/English, RTL-aware, streaming replies, Confirm/Cancel buttons showing service, dentist,
+   Riyadh date/time and price, typing, hand-off and error states.
+4. **Agent tools** (TypeScript SDK tool runner, Zod schemas), all scoped to the conversation's patient:
+   - `check_availability({service_id, date_from, date_to, dentist_id?})` (local dates, range ≤ 14
+     days, horizon 60 days) → up to 10 slots with offset-bearing start times
+   - `list_my_appointments()` → the patient's upcoming booked appointments
+   - `propose_booking({service_id, dentist_id, slot_start})`
+   - `propose_reschedule({appointment_id, new_slot_start})`
+   - `propose_cancel({appointment_id})`
+   - `handoff_to_staff({reason, summary})` → idempotent: one open hand-off per conversation
+   **One validator** is shared by availability, proposals and confirmation: dentist offers the
+   service; the full `[start, end)` interval fits the clinic hours and the dentist's schedule; start
+   on a 15-minute grid; not in the past; within the horizon; free of other booked appointments;
+   appointment belongs to the patient and is `booked`; cancellation/reschedule ≥ 4 h before start.
+   Clinic information is in the system prompt; current Riyadh date/time comes after the cache
+   breakpoint.
+5. **Pending actions and confirmation:**
+   - An action belongs to one conversation and patient; its payload is frozen at proposal time,
+     including the target appointment's `version` for reschedule/cancel.
+   - A new proposal in a conversation supersedes that conversation's older pending actions.
+   - `POST /conversations/:cid/actions/:aid/confirm|decline`. Confirm runs in **one transaction**:
+     atomically claim the action only if it is pending, unexpired (10 min) and belongs to `:cid`;
+     re-run the full validator; for reschedule/cancel require the appointment's version and
+     `booked` status to be unchanged; write the change; store the outcome. A retry returns the
+     stored outcome instead of executing again. Reschedule is one update that keeps the original
+     booking if anything fails. The Postgres exclusion constraint stays as the last backstop.
+   - Responses: 200 done (or the stored outcome on retry), 404 not this conversation's, 409
+     conflict/changed, 410 expired/superseded.
+   - The outcome is posted into the conversation so the agent sees it on the next turn.
+6. **Conversation turns:** `POST /conversations/:cid/messages` with a client message id
+   (duplicates are ignored); one active turn per conversation (a second concurrent message gets
+   409); replies stream over SSE (`\n` separators, the tested parser from project #1). Only
+   completed turns are stored (full SDK content blocks, replayed append-only); a disconnect or error
+   mid-turn stores nothing from that turn and posts a visible "please resend" state. A handed-off
+   conversation does not call the model.
+7. **Staff page** (`/staff`): appointments by dentist and day, open hand-offs with summary, close
+   hand-off (the agent resumes). **Trace view** (`/trace/:cid`): each turn's model, tool calls with
+   inputs/results, pending actions and outcomes, tokens and cost.
+8. The agent replies in the patient's language, uses only prompt or tool facts for prices and
+   availability, and never gives medical advice.
+9. **Evaluation** (CLI only: `pnpm eval -- --yes`): ~30 scenarios (AR/EN) with identical seed and
+   pinned clock per run.
+   - Scripted safety cases (fixed patient messages) for cross-patient access, skipping
+     confirmation, prompt injection and medical advice; persona-driven cases (simulated patient,
+     `claude-haiku-5-5`, turn cap) for booking flows.
+   - **Confirmation oracle:** the harness presses Confirm only when a pending action exactly matches
+     the scenario's expected action (service, dentist if specified, slot rules); otherwise it
+     declines. The agent's own claims never decide this.
+   - Scoring uses the **whole event log**, not just the final state: proposals, confirmations,
+     mutations, tool results and every visible reply. Metrics: task success, wrong proposals,
+     unconfirmed or wrong mutations, hand-off correctness, cross-patient data in replies or tool
+     results, medical advice per reply (scored separately from hand-off), turns, cost, latency.
+   - The LLM judge (JSON-delimited inputs) is calibrated first on ~10 labeled transcripts,
+     including injected ones; its accuracy is reported with the results.
+   - Reports counts with denominators, failed scenarios, simulator and judge models, total cost,
+     and run-to-run variation when `--repeat N` is used. Incomplete runs are not recommended; the
+     recommendation rule is project #1's (best safety, then success, then cost).
+   - Scorer self-tests: fixtures where the final state is correct despite an earlier violation
+     must fail.
+10. CI on every push/PR from step 1: lint, typecheck, unit + e2e tests (Postgres service), web build.
 
 ## Design
 **Repo layout:** `api/` (NestJS via `nest new`, Prisma via `prisma init`), `web/` (Next.js via
 `create-next-app`, shadcn), `api/eval/`, `docs/sdlc/`, root `docker-compose.yml`.
 
-**Data model (Prisma):** `Service`, `Dentist` (+ weekly `Schedule`), `Patient` (phone unique),
-`Appointment` (patient, dentist, service, start, end, status booked|cancelled; no overlapping
-booked appointments per dentist, enforced by a Postgres exclusion constraint in a raw SQL migration),
-`Conversation` (patient, status active|handed_off), `Message` (role, content JSON: full SDK content
-blocks so history is replayed append-only), `PendingAction` (type, payload, status
-pending|confirmed|declined|expired, expires_at), `Handoff` (reason, summary, open/closed),
-`ToolCall` (turn, name, input, result, ms).
+**Data model (Prisma):** `Service`, `Dentist` (+ `DentistService`, weekly `Schedule`), `Patient`
+(phone unique), `Appointment` (patient, dentist, service, `starts_at`/`ends_at` timestamptz, status
+booked|cancelled, `version` int; exclusion constraint on overlapping booked intervals per dentist),
+`Conversation` (patient, status active|handed_off, `active_turn` lock), `Message` (role, content
+JSON = full SDK content blocks, client message id unique per conversation), `PendingAction`
+(conversation, patient, type, frozen payload, status pending|confirmed|declined|expired|superseded,
+expires_at, outcome), `Handoff` (one open per conversation), `ToolCall` (turn, name, input, result, ms).
 
-**NestJS modules:** `clinic` (services, dentists, availability), `appointments`, `agent` (tool
-runner, tools, prompt), `conversations` (messages, SSE), `actions`, `staff`, `prisma`. DTOs with
-validation at the HTTP boundary.
+**NestJS modules:** `clinic` (services, dentists, validator, availability), `appointments`,
+`actions`, `agent` (tool runner, tools, prompt), `conversations` (turns, SSE), `staff`, `prisma`,
+`health`. DTOs validated at the HTTP boundary; `Clock` provider injected everywhere time matters.
 
 **Agent call:** `client.beta.messages.toolRunner` with `betaZodTool` tools, streaming, adaptive
 thinking, explicit effort, refusal fallback where available (off in eval), stop-reason checks,
-`max_tokens` and max tool iterations capped. System prompt (clinic info + rules) cached;
-current date/time and patient context come after the cache breakpoint.
+capped `max_tokens` and tool iterations. System prompt cached if it reaches the model's minimum
+cacheable size (measured; otherwise no cache breakpoint).
 
 ## Non-functional
-- **Security:** tools scoped to the session's patient in code; data changes only through the
-  confirm endpoint; ports on 127.0.0.1; custom header on state-changing endpoints; no HTML or
-  images rendered from model text; parameterized queries only (Prisma); API key never logged.
+- **Security:** identity through the conversation (above); data changes only through the confirm
+  endpoint; ports on 127.0.0.1; custom header on state-changing endpoints; no HTML or images rendered
+  from model text; Prisma parameterized queries; API key never logged.
 - **Performance:** first token < 3 s typical; availability query < 100 ms.
-- **Observability:** every tool call and pending action stored (the trace view reads them); JSON
-  log line per turn with tokens and cost.
-- **Rollback:** `docker compose down -v` resets data.
+- **Observability:** every tool call, pending action and outcome stored (the trace view reads
+  them); JSON log line per turn with tokens and cost.
+- **Reset:** `docker compose down -v` is a destructive reset of all demo data (there is no
+  rollback beyond git).
+
+## Review amendments (2026-10-25)
+An independent read-only review by Codex (OpenAI) raised 12 points; all were verified against the
+documents and accepted by Mohamad, except keeping prompt caching (measured) and refusal fallback
+(one line each, recommended for these models). Changes: conversation-bound identity (concern 2),
+frozen and superseding proposals, transactional confirm with idempotent retries and version checks
+(requirement 5), one shared validator (requirement 4), local dates and offset instants (concern 4),
+turn serialization and dedupe (requirement 6), event-log scoring, confirmation oracle, judge
+calibration and honest reporting (requirement 9), idempotent hand-off, `/eval` web page dropped,
+CI from step 1, readiness proof.
 
 ## Carried-forward open questions
-- None beyond flagged concerns 1 and 3.
+- None.
