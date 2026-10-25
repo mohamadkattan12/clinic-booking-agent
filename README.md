@@ -145,6 +145,7 @@ Tests never call Claude: a fake client returns real SDK message objects.
 | Free scenario check | Availability returned only each day's first 4 slots, so **evening requests could never be offered** | `time_from` / `time_to` applied before the per-day cap |
 | Live check in Chrome | Confirmation cards appeared above the message that asked for them | API sort key places each card after its turn |
 | Reading eval transcripts | The judge marked correct refusals as leaks | Judge sees the whole patient side; calibration cases |
+| Fresh clone with new volumes | The API image crashed on start: the generated Prisma client imported `.ts` files (local builds only worked because they copied the machine's generated client) | Pin the generator's import settings; keep `src/generated` out of the Docker build |
 
 ## Limitations and next steps
 
