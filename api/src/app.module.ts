@@ -13,6 +13,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     HealthModule,
     ClinicModule,
     ActionsModule,
+    AgentModule,
   ],
 })
 export class AppModule {}

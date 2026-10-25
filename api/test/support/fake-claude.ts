@@ -66,7 +66,7 @@ export class FakeClaude {
         this.calls.push(params);
         const tools = params.tools as RunnableTool[];
         const script = this.script;
-        const fake = this;
+        const countRuns = (n: number) => (this.toolRuns += n);
         let current: BetaMessage | null = null;
         let lastResults: unknown[] = [];
         return {
@@ -94,7 +94,7 @@ export class FakeClaude {
               input: unknown;
             }[];
             if (!uses.length) return null;
-            fake.toolRuns += uses.length;
+            countRuns(uses.length);
             const results = [];
             for (const use of uses) {
               const tool = tools.find((t) => t.name === use.name)!;
