@@ -19,6 +19,24 @@ const PRICES: Record<string, [number, number]> = {
 };
 export const MAX_ITERATIONS = 8;
 
+/** The API needs alternating roles: if history ends on the user side (e.g. a confirm event),
+ * the new message's blocks join that message instead of following it. */
+export function appendUserMessage(
+  history: BetaMessageParam[],
+  message: BetaMessageParam,
+): BetaMessageParam[] {
+  const last = history.at(-1);
+  if (!last || last.role !== 'user') return [...history, message];
+  const blocks = (m: BetaMessageParam) =>
+    typeof m.content === 'string'
+      ? [{ type: 'text' as const, text: m.content }]
+      : (m.content ?? []);
+  return [
+    ...history.slice(0, -1),
+    { role: 'user', content: [...blocks(last), ...blocks(message)] },
+  ];
+}
+
 export interface ToolCallRecord {
   name: string;
   input: unknown;
@@ -117,7 +135,7 @@ export class AgentService {
         ],
         thinking: { type: 'adaptive' },
         output_config: { effort: input.effort ?? 'medium' },
-        messages: [...input.history, userMessage],
+        messages: appendUserMessage(input.history, userMessage),
         tools,
         stream: true,
         max_iterations: MAX_ITERATIONS,

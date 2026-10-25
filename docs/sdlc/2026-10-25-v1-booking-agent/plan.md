@@ -127,3 +127,9 @@ refusal fallback kept.
   size) is measured from `usage.cache_read_input_tokens` once a key is available. Pending actions
   and hand-offs created by tools persist even if the turn later fails (they are separate records;
   an undelivered proposal simply expires after 10 minutes).
+- Step 6: the SSE stream opens as soon as the turn owns the conversation (an `onStart` hook), not on
+  the first text delta, so a failure during a tool call still reaches the client as a "please
+  resend" event (found by the failure test: it was a bare 500). Confirm/decline events are replayed
+  as `[Clinic system]` user-side text; consecutive user-side messages are merged both when building
+  history and when appending the new message (found by the replay test: two user messages in a row).
+  A global `ValidationPipe` (whitelist, forbid unknown fields) validates all DTOs.

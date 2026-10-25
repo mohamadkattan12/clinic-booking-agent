@@ -40,6 +40,11 @@ export const toolUse = (
   input,
 });
 
+type ScriptEntry =
+  | BetaMessage
+  | Error // simulate an API failure mid-turn
+  | ((lastToolResults: unknown[]) => BetaMessage);
+
 type RunnableTool = {
   name: string;
   run: (input: unknown) => Promise<string | unknown[]>;
@@ -54,24 +59,26 @@ export class FakeClaude {
   calls: Record<string, unknown>[] = [];
   toolRuns = 0;
 
-  constructor(
-    private script: (
-      BetaMessage | ((lastToolResults: unknown[]) => BetaMessage)
-    )[],
-  ) {}
+  constructor(public script: ScriptEntry[] = []) {}
 
   beta = {
     messages: {
-      toolRunner: (params: Record<string, unknown>) => {
+      toolRunner: (
+        params: Record<string, unknown>,
+        options?: { signal?: AbortSignal },
+      ) => {
         this.calls.push(params);
         const tools = params.tools as RunnableTool[];
-        const script = this.script;
+        const script = [...this.script];
         const countRuns = (n: number) => (this.toolRuns += n);
         let current: BetaMessage | null = null;
         let lastResults: unknown[] = [];
         return {
           async *[Symbol.asyncIterator]() {
             for (const entry of script) {
+              if (options?.signal?.aborted)
+                throw new Error('Request was aborted.');
+              if (entry instanceof Error) throw entry;
               current =
                 typeof entry === 'function' ? entry(lastResults) : entry;
               const message = current;
