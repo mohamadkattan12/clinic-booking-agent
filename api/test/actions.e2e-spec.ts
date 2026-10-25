@@ -241,6 +241,40 @@ describe('pending actions and confirmation (e2e)', () => {
     expect((await noura()).version).toBe(2);
   });
 
+  it('two reschedules confirmed at the same time: exactly one wins, each round', async () => {
+    const c2 = (
+      await prisma.conversation.create({ data: { patientId: NOURA } })
+    ).id;
+    for (const [h1, h2] of [
+      [11, 12],
+      [13, 14],
+      [15, 16],
+    ]) {
+      const before = await noura();
+      const first = await actions.propose(conversationId, NOURA, {
+        type: 'reschedule',
+        appointmentId: before.id,
+        newSlotStart: slot(MONDAY, h1),
+      });
+      const second = await actions.propose(c2, NOURA, {
+        type: 'reschedule',
+        appointmentId: before.id,
+        newSlotStart: slot(MONDAY, h2),
+      });
+      if (!first.ok || !second.ok) throw new Error('propose failed');
+      const [a, b] = await Promise.all([
+        confirm(first.actionId, conversationId),
+        confirm(second.actionId, c2),
+      ]);
+      expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 409]);
+      const after = await noura();
+      expect(after.version).toBe(before.version + 1);
+      expect(toRiyadhIso(after.startsAt)).toBe(
+        slot(MONDAY, a.status === 200 ? h1 : h2),
+      );
+    }
+  });
+
   it("a patient cannot propose changes to another patient's appointment", async () => {
     const khalids = await prisma.appointment.findFirstOrThrow({
       where: { patientId: KHALID },

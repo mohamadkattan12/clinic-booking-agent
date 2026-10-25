@@ -129,7 +129,7 @@ docker compose up -d db                                   # Postgres on 127.0.0.
 cd api && pnpm install
 pnpm lint && pnpm format:check && pnpm typecheck
 pnpm test          # 56 unit tests (rules, scorer, metrics, scenarios)
-pnpm test:e2e      # 43 e2e tests: HTTP + real Postgres + a fake Claude client
+pnpm test:e2e      # 44 e2e tests: HTTP + real Postgres + a fake Claude client
 cd ../web && pnpm install && pnpm lint && pnpm typecheck && pnpm test && pnpm build
 ```
 
