@@ -1,6 +1,6 @@
 # Plan: Clinic booking agent in a WhatsApp-style chat (v1)
 
-From: spec.md (accepted + review amendments, 2026-10-25) · Status: draft (revised after Codex review)
+From: spec.md (accepted + review amendments, 2026-10-25) · Status: accepted by Mohamad Nour on 2026-10-25 (revised after Codex review)
 Worktree: repo root (new repo) · Branch: v1-booking-agent · PR: <link once open>
 
 ## Files that change
