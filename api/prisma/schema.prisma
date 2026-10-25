@@ -1,0 +1,237 @@
+// Clinic booking agent data model. Times are timestamptz (UTC instants); the clinic is Asia/Riyadh.
+// Money is integer halalas (1 SAR = 100 halalas), VAT included.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  // Pinned: the Docker build generates before tsconfig.json is copied, and Prisma would infer ".ts".
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model ClinicHours {
+  weekday     Int // 0 = Sunday ... 6 = Saturday, clinic-local
+  startMinute Int // minutes after local midnight
+  endMinute   Int
+
+  @@id([weekday])
+  @@map("clinic_hours")
+}
+
+model Service {
+  id           String           @id // slug, e.g. "cleaning"
+  nameAr       String
+  nameEn       String
+  durationMin  Int
+  priceHalalas Int
+  prepAr       String
+  prepEn       String
+  dentists     DentistService[]
+  appointments Appointment[]
+
+  @@map("services")
+}
+
+model Dentist {
+  id           String           @id // slug
+  nameAr       String
+  nameEn       String
+  services     DentistService[]
+  schedules    Schedule[]
+  appointments Appointment[]
+
+  @@map("dentists")
+}
+
+model DentistService {
+  dentistId String
+  serviceId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id])
+  service   Service @relation(fields: [serviceId], references: [id])
+
+  @@id([dentistId, serviceId])
+  @@map("dentist_services")
+}
+
+model Schedule {
+  dentistId   String
+  weekday     Int
+  startMinute Int
+  endMinute   Int
+  dentist     Dentist @relation(fields: [dentistId], references: [id])
+
+  @@id([dentistId, weekday])
+  @@map("schedules")
+}
+
+model Patient {
+  id            String         @id @default(uuid()) @db.Uuid
+  phone         String         @unique
+  name          String
+  appointments  Appointment[]
+  conversations Conversation[]
+
+  @@map("patients")
+}
+
+enum AppointmentStatus {
+  booked
+  cancelled
+}
+
+model Appointment {
+  id        String            @id @default(uuid()) @db.Uuid
+  patientId String            @db.Uuid
+  dentistId String
+  serviceId String
+  startsAt  DateTime          @db.Timestamptz(6)
+  endsAt    DateTime          @db.Timestamptz(6)
+  status    AppointmentStatus @default(booked)
+  version   Int               @default(1)
+  createdAt DateTime          @default(now()) @db.Timestamptz(6)
+  patient   Patient           @relation(fields: [patientId], references: [id])
+  dentist   Dentist           @relation(fields: [dentistId], references: [id])
+  service   Service           @relation(fields: [serviceId], references: [id])
+
+  @@index([dentistId, startsAt])
+  @@index([patientId, startsAt])
+  @@map("appointments")
+}
+
+enum ConversationStatus {
+  active
+  handed_off
+}
+
+model Conversation {
+  id           String             @id @default(uuid()) @db.Uuid
+  patientId    String             @db.Uuid
+  status       ConversationStatus @default(active)
+  activeTurnId String?            @db.Uuid // set while a turn is running (one turn at a time)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  patient      Patient            @relation(fields: [patientId], references: [id])
+  turns        Turn[]
+  messages     Message[]
+  actions      PendingAction[]
+  handoffs     Handoff[]
+  toolCalls    ToolCall[]
+
+  @@map("conversations")
+}
+
+enum TurnStatus {
+  completed
+  failed
+}
+
+model Turn {
+  id              String       @id @default(uuid()) @db.Uuid
+  conversationId  String       @db.Uuid
+  model           String
+  status          TurnStatus
+  inputTokens     Int          @default(0)
+  cacheReadTokens Int          @default(0)
+  outputTokens    Int          @default(0)
+  costMicroUsd    Int          @default(0) // millionths of a USD
+  error           String?
+  createdAt       DateTime     @default(now()) @db.Timestamptz(6)
+  conversation    Conversation @relation(fields: [conversationId], references: [id])
+  messages        Message[]
+  toolCalls       ToolCall[]
+
+  @@index([conversationId, createdAt])
+  @@map("turns")
+}
+
+enum MessageRole {
+  user
+  assistant
+  event // action outcomes and hand-off notices shown in the chat
+}
+
+model Message {
+  id              String       @id @default(uuid()) @db.Uuid
+  conversationId  String       @db.Uuid
+  turnId          String?      @db.Uuid
+  role            MessageRole
+  content         Json // full SDK content blocks, replayed append-only
+  clientMessageId String?
+  createdAt       DateTime     @default(now()) @db.Timestamptz(6)
+  conversation    Conversation @relation(fields: [conversationId], references: [id])
+  turn            Turn?        @relation(fields: [turnId], references: [id])
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+enum ActionType {
+  book
+  reschedule
+  cancel
+}
+
+enum ActionStatus {
+  pending
+  confirmed
+  declined
+  expired
+  superseded
+  failed // confirmed by the patient but no longer valid (slot taken, appointment changed)
+}
+
+model PendingAction {
+  id                 String       @id @default(uuid()) @db.Uuid
+  conversationId     String       @db.Uuid
+  patientId          String       @db.Uuid
+  type               ActionType
+  payload            Json // frozen at proposal time (what the buttons show)
+  appointmentId      String?      @db.Uuid
+  appointmentVersion Int?
+  status             ActionStatus @default(pending)
+  expiresAt          DateTime     @db.Timestamptz(6)
+  outcome            Json? // stored result; retries return it
+  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
+  resolvedAt         DateTime?    @db.Timestamptz(6)
+  conversation       Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, status])
+  @@map("pending_actions")
+}
+
+enum HandoffStatus {
+  open
+  closed
+}
+
+model Handoff {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @db.Uuid
+  reason         String
+  summary        String
+  status         HandoffStatus @default(open)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  closedAt       DateTime?     @db.Timestamptz(6)
+  conversation   Conversation  @relation(fields: [conversationId], references: [id])
+
+  @@map("handoffs")
+}
+
+model ToolCall {
+  id             String       @id @default(uuid()) @db.Uuid
+  conversationId String       @db.Uuid
+  turnId         String       @db.Uuid
+  name           String
+  input          Json
+  result         Json
+  ms             Int
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  turn           Turn         @relation(fields: [turnId], references: [id])
+
+  @@map("tool_calls")
+}
