@@ -49,6 +49,7 @@ const { values: args } = parseArgs({
     limit: { type: 'string' },
     only: { type: 'string' },
     yes: { type: 'boolean', default: false },
+    check: { type: 'boolean', default: false }, // free: build + setup only, no API calls
   },
 });
 
@@ -86,9 +87,11 @@ async function main(): Promise<void> {
   console.log(
     `${scenarios.length} scenarios x ${models.length} models; estimated ~$${estimate.toFixed(2)}`,
   );
-  if (!args.yes) throw new Error('Re-run with --yes to call the Claude API.');
-  if (!process.env.ANTHROPIC_API_KEY?.trim())
-    throw new Error('ANTHROPIC_API_KEY is not set (repo-root .env).');
+  if (!args.check) {
+    if (!args.yes) throw new Error('Re-run with --yes to call the Claude API.');
+    if (!process.env.ANTHROPIC_API_KEY?.trim())
+      throw new Error('ANTHROPIC_API_KEY is not set (repo-root .env).');
+  }
 
   // The app reads DATABASE_URL when its modules load, so set it before importing them.
   process.env.DATABASE_URL = await prepareDatabase();
@@ -127,6 +130,32 @@ async function main(): Promise<void> {
   const conversations = app.get(ConversationsService);
   const actions = app.get(ActionsService);
   const simulator = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  if (args.check) {
+    // Free self-check (no Claude calls): the compiled runner can build the app with working
+    // dependency injection and prepare a scenario. tsx once broke this by dropping decorator metadata.
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE tool_calls, handoffs, pending_actions, messages, turns, conversations, appointments CASCADE',
+    );
+    await seed(prisma, NOW);
+    const conversation = await conversations.create(PATIENTS[0].id);
+    if (!conversation)
+      throw new Error('check: could not create a conversation');
+    const proposal = await actions.propose(conversation.id, PATIENTS[0].id, {
+      type: 'book',
+      serviceId: 'checkup',
+      dentistId: 'dr-sara',
+      slotStart: '2026-10-26T11:00:00+03:00',
+    });
+    if (!proposal.ok)
+      throw new Error(`check: proposal failed (${proposal.reason})`);
+    const outcome = await actions.confirm(conversation.id, proposal.actionId);
+    if (outcome.status !== 'confirmed')
+      throw new Error(`check: confirm returned ${outcome.status}`);
+    await app.close();
+    console.log('check: ok (app built, scenario setup, propose + confirm)');
+    return;
+  }
 
   const snapshot = async (): Promise<AppointmentRow[]> =>
     (await prisma.appointment.findMany({ orderBy: { id: 'asc' } })).map(

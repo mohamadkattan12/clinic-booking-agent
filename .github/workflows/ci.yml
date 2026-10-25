@@ -27,6 +27,7 @@ jobs:
           --health-retries 10
     env:
       TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clinic
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -44,6 +45,8 @@ jobs:
       - run: pnpm test
       - run: pnpm test:e2e
       - run: pnpm build
+      # free: the compiled eval runner builds the app with working dependency injection
+      - run: pnpm eval -- --check
 
   web:
     runs-on: ubuntu-latest

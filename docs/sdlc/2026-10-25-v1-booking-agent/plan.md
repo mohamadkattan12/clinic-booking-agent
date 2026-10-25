@@ -146,3 +146,7 @@ refusal fallback kept.
   correct (real slots and price, confirm before "booked", refusal to touch another patient's data,
   medical hand-off without advice). To refine in step 10: don't count another patient's data as a
   leak when the patient typed it themselves.
+- Step 7 (guard): `pnpm eval -- --check` (free, no API calls) builds the app the way the eval does
+  and runs a scenario setup plus propose/confirm; it runs in CI. Verified it catches the bug: the
+  same code under tsx fails with the original "Cannot read properties of undefined (reading
+  'patient')". Retest with Sonnet 5.5: 3/3, $0.03.
