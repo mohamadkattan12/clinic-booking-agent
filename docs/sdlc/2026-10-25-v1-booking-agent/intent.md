@@ -1,7 +1,7 @@
 # Intent: Clinic booking agent in a WhatsApp-style chat (portfolio project #2)
 
 Author: Mohamad Nour · Source: conversation (portfolio plan after LinkedIn KSA research) · Date: 2026-10-25
-Status: draft
+Status: accepted by Mohamad Nour on 2026-10-25 (open questions: clinic-booking-agent, Prisma, Next.js in repo, start with claude-sonnet-5-5 and let the eval decide)
 
 ## Problem
 Project #1 (arabic-docs-qa) shows RAG, citations and evaluation, but not **agents**: a model that
