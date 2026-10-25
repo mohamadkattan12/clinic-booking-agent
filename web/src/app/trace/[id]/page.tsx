@@ -36,7 +36,7 @@ function TraceView() {
         <div>
           <h1 className="text-2xl font-semibold">Trace</h1>
           <p className="text-muted-foreground">
-            <bdi>{t.patient.name}</bdi> · {t.totals.turns} turns · {t.totals.inputTokens.toLocaleString()} in /{" "}
+            <bdi>{t.patient.name}</bdi> · {t.totals.turns} {t.totals.turns === 1 ? "turn" : "turns"} · {t.totals.inputTokens.toLocaleString()} in /{" "}
             {t.totals.outputTokens.toLocaleString()} out tokens · ${t.totals.costUsd.toFixed(4)}
           </p>
         </div>
