@@ -116,8 +116,11 @@ export class ConversationsController {
           Math.max(turnEnd.get(m.turnId) ?? 0, m.createdAt.getTime()),
         );
     }
-    const actions = conversation.actions.map((a) => {
-      const end = turnEnd.get(turnOfAction.get(a.id) ?? '');
+    // Tool calls are stored only with a completed turn: a proposal from a failed turn was never
+    // presented by the agent, so it is not shown and simply expires.
+    const shown = conversation.actions.filter((a) => turnOfAction.has(a.id));
+    const actions = shown.map((a) => {
+      const end = turnEnd.get(turnOfAction.get(a.id)!);
       return {
         id: a.id,
         status: a.status,
