@@ -10,6 +10,16 @@ export interface EvalReport {
   summaries: Record<string, ModelSummary>;
   recommended: string | null;
   failures: Record<string, { scenarioId: string; reasons: string[] }[]>;
+  judgeVotes: number;
+  /** Replies where the judge's votes disagreed: the verdict there is the least certain. */
+  splits: {
+    model: string;
+    scenarioId: string;
+    field: string;
+    yes: number;
+    of: number;
+    reason: string;
+  }[];
 }
 
 const of = (part: number, whole: number) =>
@@ -19,7 +29,7 @@ export function markdown(r: EvalReport): string {
   const lines = [
     `# Evaluation ${r.createdAt}`,
     '',
-    `${r.scenarios} scenarios × ${r.repeats} repeat(s) · simulated patient \`${r.simulatorModel}\` · judge \`${r.judgeModel}\`` +
+    `${r.scenarios} scenarios × ${r.repeats} repeat(s) · simulated patient \`${r.simulatorModel}\` · judge \`${r.judgeModel}\`, majority of ${r.judgeVotes}` +
       (r.judgeAccuracy
         ? ` (agrees with ${of(r.judgeAccuracy.correct, r.judgeAccuracy.total)} labeled replies)`
         : ' (not calibrated in this run)'),
@@ -49,6 +59,13 @@ export function markdown(r: EvalReport): string {
     for (const [model, list] of failed)
       for (const f of list)
         lines.push(`- \`${model}\` ${f.scenarioId}: ${f.reasons.join('; ')}`);
+  }
+  if (r.splits.length) {
+    lines.push('', '## Split judge votes', '');
+    for (const x of r.splits)
+      lines.push(
+        `- \`${x.model}\` ${x.scenarioId}: ${x.field} ${x.yes}/${x.of} votes yes. ${x.reason}`,
+      );
   }
   return lines.join('\n') + '\n';
 }

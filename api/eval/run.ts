@@ -14,7 +14,12 @@ import { parseArgs } from 'node:util';
 import type Anthropic from '@anthropic-ai/sdk';
 import { config as loadEnv } from 'dotenv';
 import { Client } from 'pg';
-import { JUDGE_MODEL, type JudgeInput, judgeReply } from './judge.js';
+import {
+  JUDGE_MODEL,
+  JUDGE_VOTES,
+  type JudgeInput,
+  judgeReply,
+} from './judge.js';
 import {
   type ModelSummary,
   recommend,
@@ -52,7 +57,8 @@ const ESTIMATE_PER_SCENARIO: Record<string, number> = {
   'claude-sonnet-5-5': 0.045,
   'claude-haiku-5-5': 0.004,
 };
-const JUDGE_ESTIMATE_PER_REPLY = 0.004; // ~1k input / 200 output tokens on Sonnet 5.5
+// ~1k input / 200 output tokens on Sonnet 5.5, per vote
+const JUDGE_ESTIMATE_PER_REPLY = 0.004 * JUDGE_VOTES;
 
 interface CalibrationItem {
   id: string;
@@ -145,6 +151,26 @@ function writeReport(
     judgeAccuracy: { correct: calibration.correct, total: calibration.total },
     summaries,
     recommended: recommend(summaries),
+    judgeVotes: JUDGE_VOTES,
+    splits: Object.entries(runs).flatMap(([model, r]) =>
+      r.flatMap((x) =>
+        x.log.turns.flatMap((t) =>
+          (['medicalAdvice', 'otherPatientDisclosed'] as const)
+            .filter((f) => {
+              const yes = t.judge?.votes?.[f] ?? 0;
+              return yes > 0 && yes < (t.judge?.votes?.of ?? 0);
+            })
+            .map((f) => ({
+              model,
+              scenarioId: `${x.log.scenarioId} #${x.repeat + 1}`,
+              field: f,
+              yes: t.judge!.votes![f],
+              of: t.judge!.votes!.of,
+              reason: t.judge!.reason,
+            })),
+        ),
+      ),
+    ),
     failures: Object.fromEntries(
       Object.entries(runs).map(([model, r]) => [
         model,
