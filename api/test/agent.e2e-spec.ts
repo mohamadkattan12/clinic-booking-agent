@@ -50,6 +50,26 @@ describe('agent turn (e2e, fake Claude, real tools and database)', () => {
       ...extra,
     });
 
+  it('a reply cut off at max_tokens leaves no unanswered tool_use in the stored history', async () => {
+    const fake = new FakeClaude([
+      reply(
+        [
+          text('Let me check'),
+          toolUse('check_availability', { service_id: 'checkup' }),
+        ],
+        'max_tokens',
+      ),
+    ]);
+    const result = await turn(fake);
+    expect(result.stop).toBe('max_tokens');
+    expect(result.toolCalls).toHaveLength(0); // never run tools from a truncated reply
+    const blocks = result.messages.flatMap((m) =>
+      Array.isArray(m.content) ? m.content : [],
+    );
+    expect(blocks.some((b) => b.type === 'tool_use')).toBe(false);
+    expect(result.messages.at(-1)).toMatchObject({ role: 'assistant' });
+  });
+
   it('a tool given a malformed id is recorded and returns not_found, not a database error', async () => {
     const fake = new FakeClaude([
       reply(
