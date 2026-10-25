@@ -2,8 +2,11 @@
 // Money is integer halalas (1 SAR = 100 halalas), VAT included.
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  // Pinned: the Docker build generates before tsconfig.json is copied, and Prisma would infer ".ts".
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 datasource db {
