@@ -1,6 +1,6 @@
 # Spec: Clinic booking agent in a WhatsApp-style chat (v1)
 
-From: intent.md (accepted 2026-10-25) · Status: draft
+From: intent.md (accepted 2026-10-25) · Status: accepted by Mohamad Nour on 2026-10-25 (concerns 1 and 3 as proposed)
 Skills applied: sdlc, claude-api (TypeScript tool runner), nestjs-patterns, prisma-patterns,
 security-review, frontend-principles; lessons from arabic-docs-qa (localhost ports, eval design,
 fresh-clone check, Markdown without images)
