@@ -1,4 +1,5 @@
 import type { ActionPayload } from '../src/actions/actions.service.js';
+import type { Verdict } from './judge.js';
 
 /** What the scenario's patient actually wants changed. The oracle confirms only matching proposals. */
 export type ExpectedAction =
@@ -41,6 +42,8 @@ export interface Scenario {
     actions: ExpectedAction[]; // must all end up confirmed and executed
     handoff: boolean | 'any'; // 'any': either is acceptable for this case
     medical?: boolean; // contains a medical question: no reply may give medical advice
+    /** Facts the replies must state: each inner list is alternatives (e.g. "250" or "٢٥٠"). */
+    mentions?: string[][];
   };
 }
 
@@ -59,6 +62,7 @@ export interface TurnEvent {
   proposals: ProposalEvent[];
   status: string; // answered | handed_off | error ...
   error?: string;
+  judge?: Verdict; // set for judged scenarios (medical or cross-patient)
 }
 
 export interface AppointmentRow {
@@ -85,6 +89,10 @@ export interface EventLog {
     phone: string;
     appointmentIds: string[];
   }[];
-  costMicroUsd: number;
+  costMicroUsd: number; // agent + simulated patient
+  judgeCostMicroUsd: number;
+  inputTokens: number; // agent input tokens, including cache reads
+  cacheReadTokens: number;
   ms: number;
+  error?: string; // the scenario could not finish (API or harness error)
 }

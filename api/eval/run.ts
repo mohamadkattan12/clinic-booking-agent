@@ -1,6 +1,7 @@
 /**
  * Evaluation runner. Calls the Claude API (costs money):
- *   pnpm eval -- --yes [--models claude-sonnet-5-5,...] [--limit N] [--only id1,id2]
+ *   pnpm eval -- --yes [--models claude-sonnet-5-5,...] [--limit N] [--only id1,id2] [--repeat N]
+ *   pnpm eval -- --yes --calibrate   (judge accuracy on the labeled replies only)
  * Uses a separate `clinic_eval` database next to DATABASE_URL, reset and seeded for every scenario
  * with a pinned clock (Sunday 2026-10-25 09:00 Riyadh).
  */
@@ -9,11 +10,20 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import type Anthropic from '@anthropic-ai/sdk';
 import { config as loadEnv } from 'dotenv';
 import { Client } from 'pg';
+import { JUDGE_MODEL, type JudgeInput, judgeReply } from './judge.js';
+import {
+  type ModelSummary,
+  recommend,
+  type Run,
+  summarize,
+} from './metrics.js';
 import { matchExpected } from './oracle.js';
-import { DONE, nextPatientMessage } from './patient-sim.js';
-import { type ScenarioScore, scoreScenario } from './score.js';
+import { DONE, nextPatientMessage, SIMULATOR_MODEL } from './patient-sim.js';
+import { type EvalReport, markdown } from './report.js';
+import { scoreScenario } from './score.js';
 import type {
   AppointmentRow,
   EventLog,
@@ -41,6 +51,13 @@ const ESTIMATE_PER_SCENARIO: Record<string, number> = {
   'claude-sonnet-5-5': 0.045,
   'claude-haiku-5-5': 0.004,
 };
+const JUDGE_ESTIMATE_PER_REPLY = 0.004; // ~1k input / 200 output tokens on Sonnet 5.5
+
+interface CalibrationItem {
+  id: string;
+  input: JudgeInput;
+  label: { medicalAdvice: boolean; otherPatientDisclosed: boolean };
+}
 
 const { values: args } = parseArgs({
   args: process.argv.slice(2).filter((a) => a !== '--'), // `pnpm eval -- --yes` passes the "--" through
@@ -49,9 +66,33 @@ const { values: args } = parseArgs({
     limit: { type: 'string' },
     only: { type: 'string' },
     yes: { type: 'boolean', default: false },
+    repeat: { type: 'string', default: '1' },
+    calibrate: { type: 'boolean', default: false },
     check: { type: 'boolean', default: false }, // free: build + setup only, no API calls
   },
 });
+
+/** Judge every labeled reply; a verdict is correct only when both fields match the label. */
+async function calibrate(
+  client: Anthropic,
+): Promise<{ correct: number; total: number; costMicroUsd: number }> {
+  const items: CalibrationItem[] = JSON.parse(
+    readFileSync(join(EVAL_DIR, 'judge-calibration.json'), 'utf-8'),
+  );
+  let correct = 0;
+  let cost = 0;
+  for (const item of items) {
+    const { verdict, costMicroUsd } = await judgeReply(client, item.input);
+    cost += costMicroUsd;
+    const ok =
+      verdict.medicalAdvice === item.label.medicalAdvice &&
+      verdict.otherPatientDisclosed === item.label.otherPatientDisclosed;
+    if (ok) correct++;
+    else console.log(`judge disagrees on ${item.id}: ${verdict.reason}`);
+  }
+  console.log(`judge calibration: ${correct}/${items.length} agree`);
+  return { correct, total: items.length, costMicroUsd: cost };
+}
 
 async function prepareDatabase(): Promise<string> {
   const base =
@@ -80,17 +121,44 @@ async function main(): Promise<void> {
     scenarios = scenarios.filter((s) => args.only!.split(',').includes(s.id));
   if (args.limit) scenarios = scenarios.slice(0, Number(args.limit));
   const models = args.models!.split(',');
-  const estimate = models.reduce(
-    (sum, m) => sum + (ESTIMATE_PER_SCENARIO[m] ?? 0.09) * scenarios.length,
-    0,
-  );
+  const repeats = Number(args.repeat);
+  if (!Number.isInteger(repeats) || repeats < 1)
+    throw new Error('--repeat must be a positive integer.');
+  const judged = (s: Scenario) =>
+    Boolean(s.expect.medical) ||
+    s.category === 'cross_patient' ||
+    s.category === 'injection';
+  const judgedTurns = scenarios
+    .filter(judged)
+    .reduce((a, s) => a + (s.messages?.length ?? s.maxTurns), 0);
+  const estimate = args.calibrate
+    ? 12 * JUDGE_ESTIMATE_PER_REPLY
+    : repeats *
+        models.reduce(
+          (sum, m) =>
+            sum +
+            (ESTIMATE_PER_SCENARIO[m] ?? 0.09) * scenarios.length +
+            JUDGE_ESTIMATE_PER_REPLY * judgedTurns,
+          0,
+        ) +
+      12 * JUDGE_ESTIMATE_PER_REPLY;
   console.log(
-    `${scenarios.length} scenarios x ${models.length} models; estimated ~$${estimate.toFixed(2)}`,
+    args.calibrate
+      ? `judge calibration; estimated ~$${estimate.toFixed(2)}`
+      : `${scenarios.length} scenarios x ${models.length} models x ${repeats} repeat(s) + judge; estimated ~$${estimate.toFixed(2)}`,
   );
   if (!args.check) {
     if (!args.yes) throw new Error('Re-run with --yes to call the Claude API.');
     if (!process.env.ANTHROPIC_API_KEY?.trim())
       throw new Error('ANTHROPIC_API_KEY is not set (repo-root .env).');
+  }
+  if (args.calibrate) {
+    const { default: Client } = await import('@anthropic-ai/sdk');
+    const c = await calibrate(
+      new Client({ apiKey: process.env.ANTHROPIC_API_KEY }),
+    );
+    console.log(`cost $${(c.costMicroUsd / 1e6).toFixed(4)}`);
+    return;
   }
 
   // The app reads DATABASE_URL when its modules load, so set it before importing them.
@@ -182,109 +250,141 @@ async function main(): Promise<void> {
     const patient = PATIENTS[scenario.patient];
     const conversationId = (await conversations.create(patient.id))!.id;
     const before = await snapshot();
+    const facts: string[] = [];
     const otherPatients = await Promise.all(
-      PATIENTS.filter((p) => p.id !== patient.id).map(async (p) => ({
-        id: p.id,
-        name: p.name,
-        phone: p.phone,
-        appointmentIds: (
-          await prisma.appointment.findMany({ where: { patientId: p.id } })
-        ).map((a) => a.id),
-      })),
+      PATIENTS.filter((p) => p.id !== patient.id).map(async (p) => {
+        const appointments = await prisma.appointment.findMany({
+          where: { patientId: p.id },
+        });
+        for (const a of appointments)
+          facts.push(
+            `${p.name} (${p.phone}) has ${a.serviceId} with ${a.dentistId} at ${toRiyadhIso(a.startsAt)}`,
+          );
+        return {
+          id: p.id,
+          name: p.name,
+          phone: p.phone,
+          appointmentIds: appointments.map((a) => a.id),
+        };
+      }),
     );
     const turns: TurnEvent[] = [];
     const transcript: { from: 'patient' | 'clinic'; text: string }[] = [];
     const used = new Set<number>();
     let cost = 0;
+    let judgeCost = 0;
+    let inputTokens = 0;
+    let cacheReadTokens = 0;
+    let error: string | undefined;
     const started = Date.now();
 
-    for (let i = 0; i < scenario.maxTurns; i++) {
-      let patientText: string;
-      if (scenario.messages) {
-        if (i >= scenario.messages.length) break;
-        patientText = scenario.messages[i];
-      } else {
-        const next = await nextPatientMessage(simulator, scenario, transcript);
-        cost += next.costMicroUsd;
-        if (next.text === DONE || !next.text) break;
-        patientText = next.text;
-      }
-      transcript.push({ from: 'patient', text: patientText });
-      let agentText = '';
-      const turn: TurnEvent = {
-        patientText,
-        agentText: '',
-        toolCalls: [],
-        proposals: [],
-        status: 'error',
-      };
-      try {
-        const result = await conversations.send(
-          conversationId,
-          randomUUID(),
-          patientText,
-          (d) => (agentText += d),
-          undefined,
-          {
-            model,
-            fallback: false,
-          },
-        );
-        turn.status = result.status;
-        if (result.status === 'answered') {
-          const row = await prisma.turn.findUniqueOrThrow({
-            where: { id: result.turnId },
-          });
-          cost += row.costMicroUsd;
-          turn.toolCalls = (
-            await prisma.toolCall.findMany({
-              where: { turnId: result.turnId },
-              orderBy: { createdAt: 'asc' },
-            })
-          ).map((c) => ({ name: c.name, input: c.input, result: c.result }));
-          for (const actionId of result.actionIds) {
-            const action = await prisma.pendingAction.findUniqueOrThrow({
-              where: { id: actionId },
-            });
-            if (action.status !== 'pending') continue; // superseded within the same turn
-            const payload =
-              action.payload as unknown as ProposalEvent['payload'];
-            const matched = matchExpected(
-              payload,
-              scenario.expect.actions,
-              used,
-            );
-            const decision = matched === null ? 'declined' : 'confirmed';
-            const outcome =
-              decision === 'confirmed'
-                ? await actions.confirm(conversationId, actionId)
-                : await actions.decline(conversationId, actionId);
-            const executed =
-              outcome.status === 'confirmed' && Boolean(outcome.outcome?.ok);
-            if (matched !== null && executed) used.add(matched);
-            turn.proposals.push({
-              actionId,
-              payload,
-              decision,
-              matched,
-              executed,
-            });
-            transcript.push({
-              from: 'clinic',
-              text: `[Card: ${payload.type} ${payload.serviceNameEn} ${payload.startsAt} -> the patient ${decision === 'confirmed' ? 'pressed Confirm' : 'pressed Cancel'}]`,
-            });
-          }
+    try {
+      for (let i = 0; i < scenario.maxTurns; i++) {
+        let patientText: string;
+        if (scenario.messages) {
+          if (i >= scenario.messages.length) break;
+          patientText = scenario.messages[i];
+        } else {
+          const next = await nextPatientMessage(
+            simulator,
+            scenario,
+            transcript,
+          );
+          cost += next.costMicroUsd;
+          if (next.text === DONE || !next.text) break;
+          patientText = next.text;
         }
-      } catch (error) {
-        turn.error = String((error as Error)?.message ?? error);
+        transcript.push({ from: 'patient', text: patientText });
+        let agentText = '';
+        const turn: TurnEvent = {
+          patientText,
+          agentText: '',
+          toolCalls: [],
+          proposals: [],
+          status: 'error',
+        };
+        try {
+          const result = await conversations.send(
+            conversationId,
+            randomUUID(),
+            patientText,
+            (d) => (agentText += d),
+            undefined,
+            {
+              model,
+              fallback: false,
+            },
+          );
+          turn.status = result.status;
+          if (result.status === 'answered') {
+            const row = await prisma.turn.findUniqueOrThrow({
+              where: { id: result.turnId },
+            });
+            cost += row.costMicroUsd;
+            inputTokens += row.inputTokens;
+            cacheReadTokens += row.cacheReadTokens;
+            turn.toolCalls = (
+              await prisma.toolCall.findMany({
+                where: { turnId: result.turnId },
+                orderBy: { createdAt: 'asc' },
+              })
+            ).map((c) => ({ name: c.name, input: c.input, result: c.result }));
+            for (const actionId of result.actionIds) {
+              const action = await prisma.pendingAction.findUniqueOrThrow({
+                where: { id: actionId },
+              });
+              if (action.status !== 'pending') continue; // superseded within the same turn
+              const payload =
+                action.payload as unknown as ProposalEvent['payload'];
+              const matched = matchExpected(
+                payload,
+                scenario.expect.actions,
+                used,
+              );
+              const decision = matched === null ? 'declined' : 'confirmed';
+              const outcome =
+                decision === 'confirmed'
+                  ? await actions.confirm(conversationId, actionId)
+                  : await actions.decline(conversationId, actionId);
+              const executed =
+                outcome.status === 'confirmed' && Boolean(outcome.outcome?.ok);
+              if (matched !== null && executed) used.add(matched);
+              turn.proposals.push({
+                actionId,
+                payload,
+                decision,
+                matched,
+                executed,
+              });
+              transcript.push({
+                from: 'clinic',
+                text: `[Card: ${payload.type} ${payload.serviceNameEn} ${payload.startsAt} -> the patient ${decision === 'confirmed' ? 'pressed Confirm' : 'pressed Cancel'}]`,
+              });
+            }
+          }
+        } catch (error) {
+          turn.error = String((error as Error)?.message ?? error);
+        }
+        turn.agentText = agentText;
+        if (judged(scenario) && agentText) {
+          const j = await judgeReply(simulator, {
+            patientMessage: patientText,
+            reply: agentText,
+            otherPatientFacts: scenario.category === 'medical' ? [] : facts,
+          });
+          turn.judge = j.verdict;
+          judgeCost += j.costMicroUsd;
+        }
+        turns.push(turn);
+        transcript.push({ from: 'clinic', text: agentText || '(no reply)' });
+        const conversation = await prisma.conversation.findUniqueOrThrow({
+          where: { id: conversationId },
+        });
+        if (conversation.status === 'handed_off' && !scenario.messages) break;
       }
-      turn.agentText = agentText;
-      turns.push(turn);
-      transcript.push({ from: 'clinic', text: agentText || '(no reply)' });
-      const conversation = await prisma.conversation.findUniqueOrThrow({
-        where: { id: conversationId },
-      });
-      if (conversation.status === 'handed_off' && !scenario.messages) break;
+    } catch (e) {
+      // The simulator or judge failed: the scenario is incomplete, not silently passed.
+      error = String((e as Error)?.message ?? e);
     }
     const conversation = await prisma.conversation.findUniqueOrThrow({
       where: { id: conversationId },
@@ -298,60 +398,67 @@ async function main(): Promise<void> {
       handedOff: conversation.status === 'handed_off',
       otherPatients,
       costMicroUsd: cost,
+      judgeCostMicroUsd: judgeCost,
+      inputTokens,
+      cacheReadTokens,
       ms: Date.now() - started,
+      error,
     };
   }
 
-  const results: Record<string, { logs: EventLog[]; scores: ScenarioScore[] }> =
-    {};
+  const calibration = await calibrate(simulator);
+  const runs: Record<string, Run[]> = {};
   for (const model of models) {
-    results[model] = { logs: [], scores: [] };
-    for (const scenario of scenarios) {
-      process.stdout.write(`${model} ${scenario.id} ... `);
-      const log = await runScenario(scenario, model);
-      const score = scoreScenario(scenario, log);
-      results[model].logs.push(log);
-      results[model].scores.push(score);
-      console.log(
-        score.success ? 'ok' : `FAIL (${score.failureReasons.join('; ')})`,
-        `$${(log.costMicroUsd / 1e6).toFixed(4)}`,
-      );
+    runs[model] = [];
+    for (let repeat = 0; repeat < repeats; repeat++) {
+      for (const scenario of scenarios) {
+        process.stdout.write(`${model} #${repeat + 1} ${scenario.id} ... `);
+        const log = await runScenario(scenario, model);
+        const score = scoreScenario(scenario, log);
+        runs[model].push({ repeat, log, score });
+        console.log(
+          score.success ? 'ok' : `FAIL (${score.failureReasons.join('; ')})`,
+          `$${(log.costMicroUsd / 1e6).toFixed(4)}`,
+        );
+      }
     }
   }
   await app.close();
 
-  const summary = Object.fromEntries(
-    Object.entries(results).map(([model, r]) => {
-      const n = r.scores.length;
-      const count = (f: (s: ScenarioScore) => boolean) =>
-        r.scores.filter(f).length;
-      return [
-        model,
-        {
-          scenarios: n,
-          success: count((s) => s.success),
-          wrongProposals: r.scores.reduce((a, s) => a + s.wrongProposals, 0),
-          unconfirmedChanges: r.scores.reduce(
-            (a, s) => a + s.unconfirmedChanges,
-            0,
-          ),
-          handoffCorrect: count((s) => s.handoffCorrect),
-          crossPatientLeaks: count((s) => s.crossPatientLeak),
-          errors: r.scores.reduce((a, s) => a + s.errors, 0),
-          costUsd: r.logs.reduce((a, l) => a + l.costMicroUsd, 0) / 1e6,
-        },
-      ];
-    }),
+  const summaries: Record<string, ModelSummary> = Object.fromEntries(
+    Object.entries(runs).map(([model, r]) => [model, summarize(r, repeats)]),
   );
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const report: EvalReport = {
+    createdAt: stamp,
+    scenarios: scenarios.length,
+    repeats,
+    simulatorModel: SIMULATOR_MODEL,
+    judgeModel: JUDGE_MODEL,
+    judgeAccuracy: { correct: calibration.correct, total: calibration.total },
+    summaries,
+    recommended: recommend(summaries),
+    failures: Object.fromEntries(
+      Object.entries(runs).map(([model, r]) => [
+        model,
+        r
+          .filter((x) => !x.score.success)
+          .map((x) => ({
+            scenarioId: `${x.score.scenarioId} #${x.repeat + 1}`,
+            reasons: x.score.failureReasons,
+          })),
+      ]),
+    ),
+  };
   const out = join(EVAL_DIR, 'results');
   mkdirSync(out, { recursive: true });
   writeFileSync(
     join(out, `${stamp}.json`),
-    JSON.stringify({ createdAt: stamp, models, summary, results }, null, 2),
+    JSON.stringify({ ...report, runs }, null, 2),
   );
-  console.table(summary);
-  console.log(`results: eval/results/${stamp}.json`);
+  writeFileSync(join(out, `${stamp}.md`), markdown(report));
+  console.log(markdown(report));
+  console.log(`results: eval/results/${stamp}.{json,md}`);
 }
 
 main().catch((error) => {

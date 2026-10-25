@@ -12,7 +12,7 @@ import { buildTools } from './tools.js';
 // Models whose requests can use server-side refusal fallback (Claude Haiku 5.5 has none).
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5']);
 // USD per million input/output tokens (Anthropic first-party pricing, 2026-10).
-const PRICES: Record<string, [number, number]> = {
+export const PRICES: Record<string, [number, number]> = {
   'claude-opus-5-5': [4, 20],
   'claude-sonnet-5-5': [2, 10],
   'claude-haiku-5-5': [0.1, 0.5],

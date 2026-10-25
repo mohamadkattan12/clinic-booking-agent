@@ -244,6 +244,7 @@ export class ConversationsService {
           model: result.model,
           status: 'completed',
           inputTokens: result.inputTokens,
+          cacheReadTokens: result.cacheReadTokens,
           outputTokens: result.outputTokens,
           costMicroUsd: result.costMicroUsd,
         },
