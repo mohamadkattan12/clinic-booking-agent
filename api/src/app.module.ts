@@ -7,6 +7,7 @@ import { CommonModule } from './common/common.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { StaffModule } from './staff/staff.module.js';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ActionsModule,
     AgentModule,
     ConversationsModule,
+    StaffModule,
   ],
   providers: [
     // Validate every request body against its DTO; unknown fields are rejected.
