@@ -177,6 +177,7 @@ enum ActionStatus {
   declined
   expired
   superseded
+  failed // confirmed by the patient but no longer valid (slot taken, appointment changed)
 }
 
 model PendingAction {

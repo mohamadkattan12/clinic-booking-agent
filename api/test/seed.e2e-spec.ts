@@ -5,6 +5,13 @@ import { seed } from '../src/seed/seed.js';
 const prisma = createPrismaClient();
 const NOW = new Date('2026-10-25T09:00:00+03:00'); // a Sunday in Riyadh
 
+beforeAll(async () => {
+  // e2e files share one database: start from empty, whatever ran before
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE tool_calls, handoffs, pending_actions, messages, turns, conversations, appointments CASCADE',
+  );
+});
+
 afterAll(async () => {
   await prisma.$disconnect();
 });
