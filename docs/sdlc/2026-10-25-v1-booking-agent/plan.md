@@ -111,3 +111,7 @@ refusal fallback kept.
   `prisma migrate deploy` + the seed before starting. Prices are integer halalas; Riyadh is a
   fixed UTC+3 offset (no DST). Exclusion constraint and one-open-hand-off index are hand-written
   SQL in the init migration. e2e tests use a throwaway `clinic_test` database (Vitest global setup).
+- Step 3: rules are pure functions in `clinic/booking-rules.ts` (`checkSlot`, `checkChange`,
+  `availableSlots`); `ClinicService` only loads data. Availability returns at most 4 slots per day
+  (10 total) so a week-long query isn't all one morning. Another patient's appointment is reported
+  as `not_found`, exactly like a missing one. `--passWithNoTests` removed now that tests exist.
