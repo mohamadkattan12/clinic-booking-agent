@@ -2,6 +2,7 @@
  * Evaluation runner. Calls the Claude API (costs money):
  *   pnpm eval -- --yes [--models claude-sonnet-5-5,...] [--limit N] [--only id1,id2] [--repeat N]
  *   pnpm eval -- --yes --calibrate   (judge accuracy on the labeled replies only)
+ *   pnpm eval -- --yes --rejudge eval/results/<file>.json   (re-judge and re-score saved transcripts)
  * Uses a separate `clinic_eval` database next to DATABASE_URL, reset and seeded for every scenario
  * with a pinned clock (Sunday 2026-10-25 09:00 Riyadh).
  */
@@ -68,6 +69,7 @@ const { values: args } = parseArgs({
     yes: { type: 'boolean', default: false },
     repeat: { type: 'string', default: '1' },
     calibrate: { type: 'boolean', default: false },
+    rejudge: { type: 'string' },
     check: { type: 'boolean', default: false }, // free: build + setup only, no API calls
   },
 });
@@ -92,6 +94,129 @@ async function calibrate(
   }
   console.log(`judge calibration: ${correct}/${items.length} agree`);
   return { correct, total: items.length, costMicroUsd: cost };
+}
+
+const judged = (s: Scenario) =>
+  Boolean(s.expect.medical) ||
+  s.category === 'cross_patient' ||
+  s.category === 'injection';
+
+/** What the judge checks replies against: every other patient's seeded appointments. */
+const otherPatientFacts = (log: Pick<EventLog, 'before' | 'otherPatients'>) =>
+  log.otherPatients.flatMap((p) =>
+    log.before
+      .filter((a) => a.patientId === p.id)
+      .map(
+        (a) =>
+          `${p.name} (${p.phone}) has ${a.serviceId} with ${a.dentistId} at ${a.startsAt}`,
+      ),
+  );
+
+async function judgeTurn(
+  client: Anthropic,
+  scenario: Scenario,
+  turns: TurnEvent[], // up to and including the judged turn
+  facts: string[],
+): Promise<number> {
+  const turn = turns.at(-1)!;
+  if (!judged(scenario) || !turn.agentText) return 0;
+  const { verdict, costMicroUsd } = await judgeReply(client, {
+    patientMessages: turns.map((t) => t.patientText),
+    reply: turn.agentText,
+    otherPatientFacts: scenario.category === 'medical' ? [] : facts,
+  });
+  turn.judge = verdict;
+  return costMicroUsd;
+}
+
+function writeReport(
+  scenarios: Scenario[],
+  repeats: number,
+  runs: Record<string, Run[]>,
+  calibration: { correct: number; total: number },
+  suffix = '',
+): void {
+  const summaries: Record<string, ModelSummary> = Object.fromEntries(
+    Object.entries(runs).map(([model, r]) => [model, summarize(r, repeats)]),
+  );
+  const stamp =
+    new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + suffix;
+  const report: EvalReport = {
+    createdAt: stamp,
+    scenarios: scenarios.length,
+    repeats,
+    simulatorModel: SIMULATOR_MODEL,
+    judgeModel: JUDGE_MODEL,
+    judgeAccuracy: { correct: calibration.correct, total: calibration.total },
+    summaries,
+    recommended: recommend(summaries),
+    failures: Object.fromEntries(
+      Object.entries(runs).map(([model, r]) => [
+        model,
+        r
+          .filter((x) => !x.score.success)
+          .map((x) => ({
+            scenarioId: `${x.score.scenarioId} #${x.repeat + 1}`,
+            reasons: x.score.failureReasons,
+          })),
+      ]),
+    ),
+  };
+  const out = join(EVAL_DIR, 'results');
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    join(out, `${stamp}.json`),
+    JSON.stringify({ ...report, runs }, null, 2),
+  );
+  writeFileSync(join(out, `${stamp}.md`), markdown(report));
+  console.log(markdown(report));
+  console.log(`results: eval/results/${stamp}.{json,md}`);
+}
+
+/** Judge and score saved transcripts again (e.g. after a judge fix) without re-running the agents. */
+async function rejudge(
+  client: Anthropic,
+  file: string,
+  scenarios: Scenario[],
+): Promise<void> {
+  const saved: { repeats: number; runs: Record<string, Run[]> } = JSON.parse(
+    readFileSync(file, 'utf-8'),
+  );
+  const byId = new Map(scenarios.map((s) => [s.id, s]));
+  const calibration = await calibrate(client);
+  for (const [model, runs] of Object.entries(saved.runs)) {
+    for (const run of runs) {
+      const scenario = byId.get(run.log.scenarioId);
+      if (!scenario) throw new Error(`unknown scenario ${run.log.scenarioId}`);
+      const facts = otherPatientFacts(run.log);
+      run.log.judgeCostMicroUsd = 0;
+      for (let i = 0; i < run.log.turns.length; i++) {
+        delete run.log.turns[i].judge;
+        run.log.judgeCostMicroUsd += await judgeTurn(
+          client,
+          scenario,
+          run.log.turns.slice(0, i + 1),
+          facts,
+        );
+      }
+      run.score = scoreScenario(scenario, run.log);
+      console.log(
+        `${model} ${scenario.id}`,
+        run.score.success
+          ? 'ok'
+          : `FAIL (${run.score.failureReasons.join('; ')})`,
+      );
+    }
+  }
+  writeReport(
+    scenarios.filter((s) =>
+      Object.values(saved.runs)[0].some((r) => r.log.scenarioId === s.id),
+    ),
+    saved.repeats,
+    saved.runs,
+    calibration,
+    '-rejudged',
+  );
 }
 
 async function prepareDatabase(): Promise<string> {
@@ -124,15 +249,11 @@ async function main(): Promise<void> {
   const repeats = Number(args.repeat);
   if (!Number.isInteger(repeats) || repeats < 1)
     throw new Error('--repeat must be a positive integer.');
-  const judged = (s: Scenario) =>
-    Boolean(s.expect.medical) ||
-    s.category === 'cross_patient' ||
-    s.category === 'injection';
   const judgedTurns = scenarios
     .filter(judged)
     .reduce((a, s) => a + (s.messages?.length ?? s.maxTurns), 0);
   const estimate = args.calibrate
-    ? 12 * JUDGE_ESTIMATE_PER_REPLY
+    ? 14 * JUDGE_ESTIMATE_PER_REPLY
     : repeats *
         models.reduce(
           (sum, m) =>
@@ -141,7 +262,7 @@ async function main(): Promise<void> {
             JUDGE_ESTIMATE_PER_REPLY * judgedTurns,
           0,
         ) +
-      12 * JUDGE_ESTIMATE_PER_REPLY;
+      14 * JUDGE_ESTIMATE_PER_REPLY;
   console.log(
     args.calibrate
       ? `judge calibration; estimated ~$${estimate.toFixed(2)}`
@@ -152,11 +273,11 @@ async function main(): Promise<void> {
     if (!process.env.ANTHROPIC_API_KEY?.trim())
       throw new Error('ANTHROPIC_API_KEY is not set (repo-root .env).');
   }
-  if (args.calibrate) {
+  if (args.calibrate || args.rejudge) {
     const { default: Client } = await import('@anthropic-ai/sdk');
-    const c = await calibrate(
-      new Client({ apiKey: process.env.ANTHROPIC_API_KEY }),
-    );
+    const client = new Client({ apiKey: process.env.ANTHROPIC_API_KEY });
+    if (args.rejudge) return rejudge(client, args.rejudge, scenarios);
+    const c = await calibrate(client);
     console.log(`cost $${(c.costMicroUsd / 1e6).toFixed(4)}`);
     return;
   }
@@ -250,24 +371,17 @@ async function main(): Promise<void> {
     const patient = PATIENTS[scenario.patient];
     const conversationId = (await conversations.create(patient.id))!.id;
     const before = await snapshot();
-    const facts: string[] = [];
-    const otherPatients = await Promise.all(
-      PATIENTS.filter((p) => p.id !== patient.id).map(async (p) => {
-        const appointments = await prisma.appointment.findMany({
-          where: { patientId: p.id },
-        });
-        for (const a of appointments)
-          facts.push(
-            `${p.name} (${p.phone}) has ${a.serviceId} with ${a.dentistId} at ${toRiyadhIso(a.startsAt)}`,
-          );
-        return {
-          id: p.id,
-          name: p.name,
-          phone: p.phone,
-          appointmentIds: appointments.map((a) => a.id),
-        };
+    const otherPatients = PATIENTS.filter((p) => p.id !== patient.id).map(
+      (p) => ({
+        id: p.id,
+        name: p.name,
+        phone: p.phone,
+        appointmentIds: before
+          .filter((a) => a.patientId === p.id)
+          .map((a) => a.id),
       }),
     );
+    const facts = otherPatientFacts({ before, otherPatients });
     const turns: TurnEvent[] = [];
     const transcript: { from: 'patient' | 'clinic'; text: string }[] = [];
     const used = new Set<number>();
@@ -366,16 +480,8 @@ async function main(): Promise<void> {
           turn.error = String((error as Error)?.message ?? error);
         }
         turn.agentText = agentText;
-        if (judged(scenario) && agentText) {
-          const j = await judgeReply(simulator, {
-            patientMessage: patientText,
-            reply: agentText,
-            otherPatientFacts: scenario.category === 'medical' ? [] : facts,
-          });
-          turn.judge = j.verdict;
-          judgeCost += j.costMicroUsd;
-        }
         turns.push(turn);
+        judgeCost += await judgeTurn(simulator, scenario, turns, facts);
         transcript.push({ from: 'clinic', text: agentText || '(no reply)' });
         const conversation = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversationId },
@@ -425,40 +531,7 @@ async function main(): Promise<void> {
   }
   await app.close();
 
-  const summaries: Record<string, ModelSummary> = Object.fromEntries(
-    Object.entries(runs).map(([model, r]) => [model, summarize(r, repeats)]),
-  );
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const report: EvalReport = {
-    createdAt: stamp,
-    scenarios: scenarios.length,
-    repeats,
-    simulatorModel: SIMULATOR_MODEL,
-    judgeModel: JUDGE_MODEL,
-    judgeAccuracy: { correct: calibration.correct, total: calibration.total },
-    summaries,
-    recommended: recommend(summaries),
-    failures: Object.fromEntries(
-      Object.entries(runs).map(([model, r]) => [
-        model,
-        r
-          .filter((x) => !x.score.success)
-          .map((x) => ({
-            scenarioId: `${x.score.scenarioId} #${x.repeat + 1}`,
-            reasons: x.score.failureReasons,
-          })),
-      ]),
-    ),
-  };
-  const out = join(EVAL_DIR, 'results');
-  mkdirSync(out, { recursive: true });
-  writeFileSync(
-    join(out, `${stamp}.json`),
-    JSON.stringify({ ...report, runs }, null, 2),
-  );
-  writeFileSync(join(out, `${stamp}.md`), markdown(report));
-  console.log(markdown(report));
-  console.log(`results: eval/results/${stamp}.{json,md}`);
+  writeReport(scenarios, repeats, runs, calibration);
 }
 
 main().catch((error) => {

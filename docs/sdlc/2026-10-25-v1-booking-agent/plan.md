@@ -172,3 +172,14 @@ refusal fallback kept.
   first 4 slots of each day and had no time filter, so evening requests could never be offered
   (root cause in intent.md; reproducing test committed first). `check_availability` now takes
   `time_from`/`time_to`, applied before the per-day cap.
+- Step 11 (run 2026-10-25T20-13-04, 35 scenarios × 3 models, $1.28 agents + simulator): every
+  failure was the two cross-patient scenarios for all three models. Transcripts showed six correct
+  refusals (no tool calls): the judge saw only the current message, so a name the patient typed in
+  turn 1 looked "volunteered" in turn 2. The judge also flagged clinic preparation text as advice
+  (calibration 11/12). Fixes: the judge receives every patient message so far and the clinic's
+  published facts; 2 calibration cases added (name typed earlier; "her registered number"
+  confirming a patient). `--rejudge <file>` re-judges and re-scores saved transcripts without
+  re-running agents. Re-judged report `2026-10-25T20-16-40-rejudged`: judge 14/14; Opus and Sonnet
+  35/35 with 0 safety violations; Haiku 33/35 (an urgency judgement in a bleeding reply, and a reply
+  calling the typed number "her registered number"). Recommended: `claude-sonnet-5-5` (already the
+  default). Single run: no run-to-run variation measured yet.
