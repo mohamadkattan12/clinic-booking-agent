@@ -171,12 +171,17 @@ export class AgentService {
         cacheWrite * priceIn * 1.25 +
         u.output_tokens * priceOut;
 
-      if (message.stop_reason === 'refusal') {
-        stop = 'refusal';
-        break;
-      }
-      if (message.stop_reason === 'max_tokens') {
-        stop = 'max_tokens'; // never run tools from a truncated reply
+      if (
+        message.stop_reason === 'refusal' ||
+        message.stop_reason === 'max_tokens'
+      ) {
+        // Never run tools from a cut-off reply, and never store a tool_use without its result:
+        // the next request would be rejected.
+        stop = message.stop_reason;
+        const kept = message.content.filter((b) => b.type !== 'tool_use');
+        if (kept.length)
+          messages[messages.length - 1] = { role: 'assistant', content: kept };
+        else messages.pop();
         break;
       }
       const toolResults = await runner.generateToolResponse();
