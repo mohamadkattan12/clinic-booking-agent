@@ -50,6 +50,24 @@ describe('agent turn (e2e, fake Claude, real tools and database)', () => {
       ...extra,
     });
 
+  it('a tool given a malformed id is recorded and returns not_found, not a database error', async () => {
+    const fake = new FakeClaude([
+      reply(
+        [toolUse('propose_cancel', { appointment_id: 'APT-123' })],
+        'tool_use',
+      ),
+      reply([text('ok')]),
+    ]);
+    const result = await turn(fake);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]).toMatchObject({
+      name: 'propose_cancel',
+      result: { proposed: false, reason: 'not_found' },
+    });
+    const sent = JSON.stringify(fake.calls.at(-1)!.messages);
+    expect(sent).not.toMatch(/uuid|prisma|invalid input syntax/i);
+  });
+
   it('check_availability honours a time of day (evening slots are reachable)', async () => {
     const fake = new FakeClaude([
       reply(
