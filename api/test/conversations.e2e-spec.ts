@@ -205,6 +205,30 @@ describe('conversations and turns (e2e)', () => {
     expect(await prisma.message.count({ where: { conversationId } })).toBe(2);
   });
 
+  it('a proposal from a failed turn is not shown in the chat', async () => {
+    claude.script = [
+      reply(
+        [
+          toolUse('propose_booking', {
+            service_id: 'checkup',
+            dentist_id: 'dr-sara',
+            slot_start: '2026-10-26T11:00:00+03:00',
+          }),
+        ],
+        'tool_use',
+      ),
+      new Error('overloaded_error'),
+    ];
+    await send('book Monday 11').expect(200); // ends with the "please resend" event
+    expect(
+      await prisma.pendingAction.count({ where: { conversationId } }),
+    ).toBe(1);
+    const view = await request(app.getHttpServer())
+      .get(`/conversations/${conversationId}`)
+      .expect(200);
+    expect(view.body.actions).toEqual([]); // the patient never saw the agent offer it
+  });
+
   it('a client disconnect mid-turn stores nothing from that turn', async () => {
     const abort = new AbortController();
     claude.script = [
