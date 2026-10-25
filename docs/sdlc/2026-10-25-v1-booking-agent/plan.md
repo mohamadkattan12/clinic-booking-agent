@@ -119,3 +119,11 @@ refusal fallback kept.
   real race bug while running the e2e suite 60 times (deadlock -> 500, 1 in 55): fixed with a
   P2034 retry via the bugfix procedure (root cause in intent.md). e2e timeout raised to 60 s in the
   Vitest config (the 40-round stress test exceeds Vitest's 5 s default; the locked test is unchanged).
+- Step 5: `@anthropic-ai/sdk` 1.3 runs the tool loop over a server-side message thread by default;
+  we pass `thread: false` (our database holds the history). History is recorded from the documented
+  per-iteration hooks: `stream.finalMessage()` + `runner.generateToolResponse()` (cached tool
+  results), never from runner internals. Tools are built per turn with the patient id in a closure.
+  The system prompt always carries `cache_control`; whether it actually caches (minimum cacheable
+  size) is measured from `usage.cache_read_input_tokens` once a key is available. Pending actions
+  and hand-offs created by tools persist even if the turn later fails (they are separate records;
+  an undelivered proposal simply expires after 10 minutes).

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ActionsModule } from './actions/actions.module.js';
+import { AgentModule } from './agent/agent.module.js';
 import { ClinicModule } from './clinic/clinic.module.js';
 import { CommonModule } from './common/common.module.js';
 import { HealthModule } from './health/health.module.js';
