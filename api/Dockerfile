@@ -1,7 +1,8 @@
 FROM node:24-alpine AS build
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml prisma7.config.ts ./
+COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build && pnpm prune --prod
@@ -11,7 +12,9 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=8000
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/package.json ./
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/package.json /app/prisma7.config.ts ./
 USER node
 EXPOSE 8000
-CMD ["node", "dist/main"]
+# Apply migrations and the idempotent seed, then start the API.
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && node dist/seed/run.js && node dist/main.js"]

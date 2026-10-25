@@ -99,4 +99,15 @@ verified and incorporated (see spec "Review amendments"), except: prompt caching
 refusal fallback kept.
 
 ## Departures from plan
-<Anything implemented differently, and why. Updated in the same commit.>
+- Step 1: NestJS 12 generates Vitest (not Jest) and oxlint; added `typecheck` (tsc) and
+  `format:check` (prettier) scripts. `pnpm test` uses `--passWithNoTests` until unit tests exist.
+  pnpm 11 blocks dependency build scripts: approved only `prisma` and `@prisma/engines`.
+  Project #1's stack had to be stopped to free ports 3000/8000 (same defaults by design).
+- Step 2: `prisma init` (7.10.1) writes `prisma7.config.ts` (kept) and also downloaded Prisma
+  "agent skills" into `api/.claude/` and `api/.agents/` plus `skills-lock.json`: removed, as
+  unrequested instruction files. The generated client lives in `src/generated/prisma` (git-ignored,
+  lint-ignored) so `dist/main.js` keeps its layout; `prisma generate` runs on `postinstall`.
+  `prisma` and `dotenv` are runtime dependencies because the container runs
+  `prisma migrate deploy` + the seed before starting. Prices are integer halalas; Riyadh is a
+  fixed UTC+3 offset (no DST). Exclusion constraint and one-open-hand-off index are hand-written
+  SQL in the init migration. e2e tests use a throwaway `clinic_test` database (Vitest global setup).
