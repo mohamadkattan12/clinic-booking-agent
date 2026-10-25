@@ -1,5 +1,9 @@
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta';
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnApplicationBootstrap,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { ActionPayload, Outcome } from '../actions/actions.service.js';
 import { hasApiKey } from '../agent/agent.module.js';
@@ -88,13 +92,23 @@ export function toApiMessages(
 }
 
 @Injectable()
-export class ConversationsService {
+export class ConversationsService implements OnApplicationBootstrap {
   private readonly log = new Logger('Turn');
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly agent: AgentService,
   ) {}
+
+  /** A lock still set at startup belongs to a turn that died with the previous process. */
+  // shortcut: assumes one API process; with several, use a lock timestamp and expire old locks.
+  async onApplicationBootstrap(): Promise<void> {
+    const { count } = await this.prisma.conversation.updateMany({
+      where: { activeTurnId: { not: null } },
+      data: { activeTurnId: null },
+    });
+    if (count) this.log.warn(`released ${count} stale turn lock(s)`);
+  }
 
   async create(patientId: string): Promise<{ id: string } | null> {
     const patient = await this.prisma.patient.findUnique({
