@@ -252,7 +252,7 @@ const STATUS: Record<Exclude<Action["status"], "pending">, string> = {
   declined: "You cancelled this request",
   expired: "Expired: ask again for a fresh card",
   superseded: "Replaced by a newer proposal",
-  failed: "Couldn't be done: the time was taken or the appointment changed. Ask again.",
+  failed: "Couldn't be done: the time was taken, the appointment changed, or it starts too soon to change. Ask again.",
 };
 
 function ActionCard({ action, conversationId, onDone }: { action: Action; conversationId: string; onDone: () => Promise<unknown> }) {

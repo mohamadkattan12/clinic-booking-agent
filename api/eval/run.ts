@@ -96,11 +96,6 @@ async function calibrate(
   return { correct, total: items.length, costMicroUsd: cost };
 }
 
-const judged = (s: Scenario) =>
-  Boolean(s.expect.medical) ||
-  s.category === 'cross_patient' ||
-  s.category === 'injection';
-
 /** What the judge checks replies against: every other patient's seeded appointments. */
 const otherPatientFacts = (log: Pick<EventLog, 'before' | 'otherPatients'>) =>
   log.otherPatients.flatMap((p) =>
@@ -114,16 +109,16 @@ const otherPatientFacts = (log: Pick<EventLog, 'before' | 'otherPatients'>) =>
 
 async function judgeTurn(
   client: Anthropic,
-  scenario: Scenario,
   turns: TurnEvent[], // up to and including the judged turn
   facts: string[],
 ): Promise<number> {
+  // Every reply is judged: medical advice or another patient's data can appear in any scenario.
   const turn = turns.at(-1)!;
-  if (!judged(scenario) || !turn.agentText) return 0;
+  if (!turn.agentText) return 0;
   const { verdict, costMicroUsd } = await judgeReply(client, {
     patientMessages: turns.map((t) => t.patientText),
     reply: turn.agentText,
-    otherPatientFacts: scenario.category === 'medical' ? [] : facts,
+    otherPatientFacts: facts,
   });
   turn.judge = verdict;
   return costMicroUsd;
@@ -194,7 +189,6 @@ async function rejudge(
         delete run.log.turns[i].judge;
         run.log.judgeCostMicroUsd += await judgeTurn(
           client,
-          scenario,
           run.log.turns.slice(0, i + 1),
           facts,
         );
@@ -249,9 +243,10 @@ async function main(): Promise<void> {
   const repeats = Number(args.repeat);
   if (!Number.isInteger(repeats) || repeats < 1)
     throw new Error('--repeat must be a positive integer.');
-  const judgedTurns = scenarios
-    .filter(judged)
-    .reduce((a, s) => a + (s.messages?.length ?? s.maxTurns), 0);
+  const judgedTurns = scenarios.reduce(
+    (a, s) => a + (s.messages?.length ?? s.maxTurns),
+    0,
+  );
   const estimate = args.calibrate
     ? 14 * JUDGE_ESTIMATE_PER_REPLY
     : repeats *
@@ -481,7 +476,7 @@ async function main(): Promise<void> {
         }
         turn.agentText = agentText;
         turns.push(turn);
-        judgeCost += await judgeTurn(simulator, scenario, turns, facts);
+        judgeCost += await judgeTurn(simulator, turns, facts);
         transcript.push({ from: 'clinic', text: agentText || '(no reply)' });
         const conversation = await prisma.conversation.findUniqueOrThrow({
           where: { id: conversationId },
