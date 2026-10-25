@@ -115,3 +115,7 @@ refusal fallback kept.
   `availableSlots`); `ClinicService` only loads data. Availability returns at most 4 slots per day
   (10 total) so a week-long query isn't all one morning. Another patient's appointment is reported
   as `not_found`, exactly like a missing one. `--passWithNoTests` removed now that tests exist.
+- Step 4: actions gained a `failed` status (confirmed but no longer valid; stored outcome). Found a
+  real race bug while running the e2e suite 60 times (deadlock -> 500, 1 in 55): fixed with a
+  P2034 retry via the bugfix procedure (root cause in intent.md). e2e timeout raised to 60 s in the
+  Vitest config (the 40-round stress test exceeds Vitest's 5 s default; the locked test is unchanged).

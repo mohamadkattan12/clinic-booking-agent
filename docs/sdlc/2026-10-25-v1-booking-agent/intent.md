@@ -63,3 +63,17 @@ A public repo (`mohamadkattan12`) where a reviewer runs `docker compose up` and:
    page), reusing project #1's patterns.
 4. Answer model: start with `claude-sonnet-5-5` (project #1's recommendation) and let this
    project's evaluation decide, since tool use is a different task.
+
+## Bug found while building step 4 (2026-10-25)
+- **Symptom:** two patients confirming the same slot at the same moment: one 409 (correct) and,
+  about 1 run in 55, a 500 instead of the second 409.
+- **Origin:** `api/src/actions/actions.service.ts` `confirm`: only errors mentioning
+  `appointments_no_overlap` were treated as conflicts.
+- **Proof:** `PrismaClientKnownRequestError code: 'P2034' ... originalCode: '40P01',
+  originalMessage: 'deadlock detected'` from `tx.appointment.create()`.
+- **Cause:** two transactions inserting overlapping rows wait on each other inside the exclusion
+  constraint; PostgreSQL aborts one as a deadlock, which escaped as a 500.
+- **Fix:** retry the confirm transaction (up to 3 attempts) on P2034; the retry sees the winner and
+  answers 409 `slot_taken`. The transaction also gets an explicit 15 s budget (Prisma's 5 s default
+  is tight under lock waits). Regression tests: `api/test/confirm-deadlock.e2e-spec.ts` (injected
+  P2034 + 40-round real race), committed first in 02ef628.

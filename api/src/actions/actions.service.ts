@@ -8,7 +8,7 @@ import {
   type RuleViolation,
 } from '../clinic/booking-rules.js';
 import { ClinicService } from '../clinic/clinic.service.js';
-import type { PendingAction, Prisma } from '../generated/prisma/client.js';
+import { type PendingAction, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export const ACTION_TTL_MS = 10 * 60 * 1000;
@@ -71,6 +71,10 @@ class ConfirmConflict extends Error {
     super(reason);
   }
 }
+
+const CONFIRM_ATTEMPTS = 3;
+const isWriteConflict = (e: unknown) =>
+  e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2034';
 
 const isOverlapViolation = (e: unknown) =>
   String((e as Error)?.message ?? e).includes('appointments_no_overlap');
@@ -189,37 +193,56 @@ export class ActionsService {
     conversationId: string,
     actionId: string,
   ): Promise<ResolveResult> {
+    // Concurrent confirms for overlapping slots can make PostgreSQL abort one transaction as a
+    // deadlock (40P01, Prisma P2034). Retrying lets it see the winner and answer 409 slot_taken.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.attemptConfirm(conversationId, actionId);
+      } catch (error) {
+        if (!isWriteConflict(error) || attempt >= CONFIRM_ATTEMPTS) throw error;
+      }
+    }
+  }
+
+  private async attemptConfirm(
+    conversationId: string,
+    actionId: string,
+  ): Promise<ResolveResult> {
     const now = this.clock.now();
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const claimed = await tx.pendingAction.updateMany({
-          where: {
-            id: actionId,
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const claimed = await tx.pendingAction.updateMany({
+            where: {
+              id: actionId,
+              conversationId,
+              status: 'pending',
+              expiresAt: { gt: now },
+            },
+            data: { status: 'confirmed', resolvedAt: now },
+          });
+          if (claimed.count === 0)
+            return this.alreadyResolved(conversationId, actionId, now);
+          const action = await tx.pendingAction.findUniqueOrThrow({
+            where: { id: actionId },
+          });
+          const outcome = await this.execute(tx, action, now);
+          await tx.pendingAction.update({
+            where: { id: actionId },
+            data: { outcome: outcome as unknown as Prisma.InputJsonValue },
+          });
+          await this.postOutcome(
+            tx,
             conversationId,
-            status: 'pending',
-            expiresAt: { gt: now },
-          },
-          data: { status: 'confirmed', resolvedAt: now },
-        });
-        if (claimed.count === 0)
-          return this.alreadyResolved(conversationId, actionId, now);
-        const action = await tx.pendingAction.findUniqueOrThrow({
-          where: { id: actionId },
-        });
-        const outcome = await this.execute(tx, action, now);
-        await tx.pendingAction.update({
-          where: { id: actionId },
-          data: { outcome: outcome as unknown as Prisma.InputJsonValue },
-        });
-        await this.postOutcome(
-          tx,
-          conversationId,
-          actionId,
-          'confirmed',
-          outcome,
-        );
-        return { status: 'confirmed' as const, outcome };
-      });
+            actionId,
+            'confirmed',
+            outcome,
+          );
+          return { status: 'confirmed' as const, outcome };
+        },
+        // lock waits during a slot race can take a second or more; Prisma's default is 5 s
+        { maxWait: 10_000, timeout: 15_000 },
+      );
     } catch (error) {
       const reason =
         error instanceof ConfirmConflict

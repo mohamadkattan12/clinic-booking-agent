@@ -12,5 +12,6 @@ export default defineConfig({
     globalSetup: ['./test/support/database.ts'],
     env: { DATABASE_URL: admin.replace(/\/[^/]+$/, '/clinic_test') },
     fileParallelism: false, // the e2e files share one test database
+    testTimeout: 60_000, // real-database races and stress loops take longer than the 5 s default
   },
 });
