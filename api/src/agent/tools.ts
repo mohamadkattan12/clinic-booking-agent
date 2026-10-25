@@ -51,6 +51,12 @@ const date = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .describe('Clinic-local date, YYYY-MM-DD');
+const clockTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+  .describe('Clinic-local time, HH:MM (24-hour)');
+const minutes = (t: string | undefined) =>
+  t === undefined ? undefined : Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
 const instant = z
   .string()
   .describe(
@@ -65,12 +71,14 @@ export function buildTools(ctx: ToolContext) {
     tool(
       ctx,
       'check_availability',
-      'Find free appointment slots for a service between two clinic-local dates (inclusive, at most 14 days). Returns up to 10 slots across days.',
+      'Find free appointment slots for a service between two clinic-local dates (inclusive, at most 14 days). Returns up to 10 slots across days, the earliest of each day first: pass time_from/time_to when the patient wants a time of day.',
       z.object({
         service_id: z.string(),
         date_from: date,
         date_to: date,
         dentist_id: z.string().optional().describe('Only this dentist'),
+        time_from: clockTime.optional().describe('Earliest start, HH:MM'),
+        time_to: clockTime.optional().describe('Latest start, HH:MM'),
       }),
       async (input) => {
         const now = ctx.clock.now();
@@ -92,6 +100,8 @@ export function buildTools(ctx: ToolContext) {
             dateFrom: input.date_from,
             dateTo: input.date_to,
             dentistId: input.dentist_id,
+            fromMinute: minutes(input.time_from),
+            toMinute: minutes(input.time_to),
           },
           now,
         );

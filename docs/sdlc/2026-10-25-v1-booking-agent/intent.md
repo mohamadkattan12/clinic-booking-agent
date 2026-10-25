@@ -77,3 +77,15 @@ A public repo (`mohamadkattan12`) where a reviewer runs `docker compose up` and:
   answers 409 `slot_taken`. The transaction also gets an explicit 15 s budget (Prisma's 5 s default
   is tight under lock waits). Regression tests: `api/test/confirm-deadlock.e2e-spec.ts` (injected
   P2034 + 40-round real race), committed first in 02ef628.
+
+## Bug: evening slots unreachable (found in step 10, 2026-10-25)
+- **Origin:** `api/src/clinic/booking-rules.ts` `availableSlots` keeps only the earliest
+  `MAX_SLOTS_PER_DAY` (4) slots of each day; `check_availability` had no time-of-day input.
+- **Proof:** the scenario-achievability test failed for all 7 scenarios whose window starts later
+  in the day (e.g. check-up with Dr. Omar on Tuesday after 17:00 returned 13:00 first); the
+  reproducing unit test received `13:00` when asked for `17:00`.
+- **Causal chain:** the agent may only propose slot starts the tool returned, so an evening request
+  ends in a wrong proposal (declined) or "nothing free".
+- **Not covered:** the 10-slot total across a multi-day range is unchanged.
+- **Regression tests:** `booking-rules.spec.ts` "can find evening slots…", `agent.e2e-spec.ts`
+  "check_availability honours a time of day".

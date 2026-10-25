@@ -50,6 +50,32 @@ describe('agent turn (e2e, fake Claude, real tools and database)', () => {
       ...extra,
     });
 
+  it('check_availability honours a time of day (evening slots are reachable)', async () => {
+    const fake = new FakeClaude([
+      reply(
+        [
+          toolUse('check_availability', {
+            service_id: 'checkup',
+            date_from: '2026-10-27',
+            date_to: '2026-10-27',
+            dentist_id: 'dr-omar',
+            time_from: '17:00',
+            time_to: '18:00',
+          }),
+        ],
+        'tool_use',
+      ),
+      reply([text('ok')]),
+    ]);
+    const result = await turn(fake);
+    const slots = (result.toolCalls[0].result as { slots: { start: string }[] })
+      .slots;
+    expect(slots[0].start).toBe('2026-10-27T17:00:00+03:00');
+    expect(slots.every((s) => s.start <= '2026-10-27T18:00:00+03:00')).toBe(
+      true,
+    );
+  });
+
   it('books in two steps: availability, then a proposal the patient must confirm', async () => {
     const fake = new FakeClaude([
       reply(

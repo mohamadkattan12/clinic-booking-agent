@@ -132,6 +132,8 @@ export type AvailabilityQuery = {
   dateFrom: string;
   dateTo: string;
   dentistId?: string;
+  fromMinute?: number; // earliest start, minutes after clinic-local midnight
+  toMinute?: number; // latest start
 };
 export type Slot = { dentistId: string; start: string; end: string };
 
@@ -183,6 +185,9 @@ export function availableSlots(
         minute < hours.endMinute;
         minute += SLOT_STEP_MIN
       ) {
+        // The window applies before the per-day cap, or later times could never be returned.
+        if (q.fromMinute !== undefined && minute < q.fromMinute) continue;
+        if (q.toMinute !== undefined && minute > q.toMinute) continue;
         const start = riyadhInstant(date, minute);
         const check = checkSlot(
           data,

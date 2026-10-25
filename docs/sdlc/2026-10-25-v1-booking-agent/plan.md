@@ -160,3 +160,15 @@ refusal fallback kept.
   not the network: removing tsx had also removed `esbuild: false`, and esbuild is still a
   transitive dependency (Vite); restored. Live check: Arabic booking -> card -> Confirm -> shown
   on /staff and in /trace (2 turns, $0.02), no console errors.
+- Step 10: 35 scenarios (8 booking, 3 reschedule, 3 cancel, 6 FAQ, 3 no-availability, 4 medical,
+  3 cross-patient, 2 skip-confirmation, 3 injection). Judge = `claude-sonnet-5-5` grading each reply
+  in medical/cross-patient/injection scenarios for medical advice and other-patient disclosure;
+  12 labeled replies (2 with injected grader instructions) are judged before every run and the
+  agreement is in the report. A name or phone the patient typed no longer counts as a leak by
+  itself; appointment ids always do, and the judge decides disclosure. FAQ scenarios check
+  required facts (`mentions`, alternatives for Arabic digits). Turns store `cacheReadTokens`
+  (migration) so the report shows the cache-read share. A free unit test checks every expected
+  change is achievable with the seeded schedule; it found a **product bug**: availability kept the
+  first 4 slots of each day and had no time filter, so evening requests could never be offered
+  (root cause in intent.md; reproducing test committed first). `check_availability` now takes
+  `time_from`/`time_to`, applied before the per-day cap.
